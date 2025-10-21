@@ -23,7 +23,6 @@ Thumbs.db
 
 # Build / empaquetado
 build/
-dist/
 *.spec
 
 # Datos generados
@@ -32,7 +31,6 @@ data/salida/
 mensajes_validacion.txt
 
 # Ejecutables y binarios
-*.exe
 *.dll
 
 # Configs locales (si querés mantener uno de ejemplo, renombrá)
