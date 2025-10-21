@@ -1,4 +1,3 @@
-# src/mark_dest.py
 from openpyxl.styles import PatternFill, Font
 from openpyxl import load_workbook
 from pathlib import Path
@@ -149,7 +148,7 @@ def mark_and_append(
                         underline="single",
                     )
         else:
-            missing_afip_rows.append(row)  # solo contamos, no insertamos
+            missing_afip_rows.append(row) 
 
     # 6) Guardar de forma segura
     missing_count = len(missing_afip_rows)

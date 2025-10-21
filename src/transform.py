@@ -1,4 +1,3 @@
-# src/transform.py
 import pandas as pd
 import re
 
@@ -29,7 +28,7 @@ def _resolve_col(df, key):
     if key is None:
         return None
     key = str(key).strip()
-    if len(key) <= 3 and key.isalpha():          # letra (A,B,C,...)
+    if len(key) <= 3 and key.isalpha():         
         def col_letter_to_index(letter):
             letter = letter.upper()
             idx = 0
@@ -38,7 +37,7 @@ def _resolve_col(df, key):
             return idx - 1
         idx = col_letter_to_index(key)
         return df.columns[idx]
-    return key                                    # nombre exacto
+    return key                                    
 
 def _tipo_to_letter(v):
     """
@@ -88,13 +87,11 @@ def _build_ncomp_from_parts(tipo, pv, num, pattern):
     num_i  = _to_int_safe(num)
     return pattern.format(letter=letter, pv=pv_i, num=num_i)
 
-# ---------- loaders que usan el mapeo del config ----------
 def load_afip_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
     # En AFIP la primera fila es un comprobante en texto: los encabezados reales están en la segunda fila
     df = pd.read_excel(path, sheet_name=sheet, header=1)
     amap = mp["afip"]
 
-    # N_COMP: construir desde Tipo/PV/Num con patrón configurable (default pv 4 dígitos)
     c_tipo = _resolve_col(df, amap["tipo"])
     c_pv   = _resolve_col(df, amap["pv"])
     c_num  = _resolve_col(df, amap["num"])
@@ -115,7 +112,7 @@ def load_afip_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
     else:
         tc = 1.0
 
-    # Importes AFIP: neto=K, exento=M, iva=N, total=O
+    # Importes AFIP: neto=K, exento=L, iva=N, total=O
     mi = amap.get("importes", {})
     def take_num(colkey):
         ck = _resolve_col(df, mi.get(colkey))
@@ -135,7 +132,6 @@ def load_tango_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=sheet, header=0)
     tmap = mp["tango"]
 
-    # N_COMP directo (columna H "N_COMP")
     c_ncomp = tmap["n_comp_column"]
     df["N_COMP"] = df[c_ncomp].map(_normalize_ncomp)
 

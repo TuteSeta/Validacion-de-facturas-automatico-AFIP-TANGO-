@@ -1,4 +1,3 @@
-# src/main.py
 import sys
 import yaml
 from pathlib import Path
@@ -10,15 +9,13 @@ from src.origen_validated import write_origen_validado
 from src.mark_dest import mark_and_append
 
 
-# --- Ubicar recursos (config.yaml) en dev o PyInstaller ---
 def _base_dir() -> Path:
     """
     Devuelve la carpeta base del proyecto en dev o la carpeta temporal
     del bundle cuando está empaquetado (sys._MEIPASS).
     """
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)  # tipo: ignore[attr-defined]
-    # src/main.py -> <repo_root>/src -> parents[1] = <repo_root>
+        return Path(sys._MEIPASS)  
     return Path(__file__).resolve().parents[1]
 
 

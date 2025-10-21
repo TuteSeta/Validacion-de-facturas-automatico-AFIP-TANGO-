@@ -1,4 +1,3 @@
-# src/compare.py
 import numpy as np
 import pandas as pd
 from typing import Dict, List
@@ -24,7 +23,6 @@ def _coerce(value, kind):
             return pd.to_datetime(value).date()
         except Exception:
             return np.nan
-    # string
     return str(value).strip().upper()
 
 def compare_columns(df_merged: pd.DataFrame, keys: list, columns_cfg: list) -> pd.DataFrame:
@@ -48,7 +46,7 @@ def compare_columns(df_merged: pd.DataFrame, keys: list, columns_cfg: list) -> p
     results["__row_ok__"] = results[match_cols].all(axis=1)
     return results
 
-# -------- Mensajes por factura (según requerimiento) --------
+# -------- Mensajes por factura --------
 def _fmt_money_es(v: float) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return ""
@@ -110,7 +108,6 @@ def compare_and_messages(
             is_ok = (isinstance(a_adj, float) and isinstance(bv, float) and (abs(a_adj - bv) <= tol))
             if not is_ok:
                 ok_all = False
-                # Guardamos el valor AJUSTADO para el mensaje
                 diffs.append((name, a_adj, bv))
 
         if ok_all:

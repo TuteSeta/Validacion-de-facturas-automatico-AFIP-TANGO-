@@ -8,7 +8,6 @@ def write_report(path_output: str, df: pd.DataFrame, keys, columns_cfg):
     """
     Genera un Excel con las diferencias marcadas en amarillo.
     """
-    # Exportamos primero a Excel plano
     cols_order = keys[:]
     for c in columns_cfg:
         name = c["name"]
@@ -18,11 +17,10 @@ def write_report(path_output: str, df: pd.DataFrame, keys, columns_cfg):
     df_export = df[cols_order].copy()
     df_export.to_excel(path_output, sheet_name="Validación", index=False)
 
-    # Reabrimos para pintar diferencias
     wb = load_workbook(path_output)
     ws = wb["Validación"]
-
-    # Mapeo de encabezados (columna -> índice)
+    
+    # Mapeo de encabezados
     header = {ws.cell(row=1, column=j).value: j for j in range(1, ws.max_column + 1)}
 
     for i in range(2, ws.max_row + 1):

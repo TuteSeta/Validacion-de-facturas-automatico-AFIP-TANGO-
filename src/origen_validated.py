@@ -20,7 +20,6 @@ def _build_ncomp_from_parts_row(row, df, amap):
     return pattern.format(letter=letter, pv=pv_i, num=num_i)
 
 def _compute_status_series(full_df: pd.DataFrame, destino_df: pd.DataFrame, amap: dict, tolerances: dict) -> pd.Series:
-    # Preparar claves y montos del origen para comparar
     work = full_df.copy()
     work["N_COMP"] = work.apply(lambda r: _build_ncomp_from_parts_row(r, full_df, amap), axis=1).astype(str).str.strip().str.upper()
 
@@ -43,7 +42,6 @@ def _compute_status_series(full_df: pd.DataFrame, destino_df: pd.DataFrame, amap
     work["IMP_IVA"]    = take_num("iva")
     work["IMP_TOTAL"]  = take_num("total")
 
-    # Merge contra destino ya agregado
     keys = ["N_COMP", "IDENTIFTRI"]
     merged = work.merge(destino_df, on=keys, how="left", suffixes=("_origen", "_destino"), indicator=True)
 

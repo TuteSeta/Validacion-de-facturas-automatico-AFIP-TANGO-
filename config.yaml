@@ -1,5 +1,5 @@
 # Configuración inicial
-# Hoja(s) a usar en cada libro (puede ser nombre o índice)
+# Hoja a usar en cada libro (puede ser nombre o índice)
 origen_sheet: "Sheet1"
 destino_sheet: "Hoja1"
 
@@ -29,7 +29,7 @@ mapping:
       iva:    "IMP_IVA"
       total:  "IMP_TOTAL"
 
-# Solo importes (SIN nombre)
+# Solo importes 
 columns:
   - name: "IMP_EXENTO"
     type: "number"
