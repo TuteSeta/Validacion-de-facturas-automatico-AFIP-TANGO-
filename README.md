@@ -15,26 +15,6 @@ Pensado para **usuarios no técnicos**: puede utilizarse con **interfaz gráfica
 
 ---
 
-## 📁 Estructura del proyecto
-```
-.
-├─ dist/
-│  └─ ValidadorFacturas.exe         # Ejecutable listo para usar
-├─ data/
-│  ├─ origen.xlsx                    # Facturas AFIP
-│  ├─ destino.xlsx                   # Facturas Tango
-│  └─ salida/                        # Carpeta de resultados
-├─ config.yaml
-├─ src/
-│  ├─ main.py
-│  ├─ launcher_gui_bootstrap.py
-│  ├─ transform.py
-│  ├─ compare.py
-│  ├─ origen_validated.py
-│  └─ mark_dest.py
-└─ README.md
-```
-
 ---
 
 ## 🖱️ Uso del ejecutable (.exe)
@@ -46,9 +26,8 @@ Pensado para **usuarios no técnicos**: puede utilizarse con **interfaz gráfica
    - Elegí una **carpeta de salida** donde se guardarán los resultados.
 4. Presioná **Validar**.
 5. En la carpeta de salida se generarán los siguientes archivos:
-   - `origen_validado.xlsx` → versión normalizada de AFIP.
+   - `origen_validado.xlsx` → versión de AFIP con colores sobre lo que esta, no esta o esta diferente.
    - `destino_marcado.xlsx` → archivo TANGO con marcas y comentarios.
-   - `mensajes_validacion.txt` → resumen de diferencias encontradas.
 
 ✅ **No requiere instalación** ni entorno Python.
 
@@ -82,7 +61,6 @@ Pensado para **usuarios no técnicos**: puede utilizarse con **interfaz gráfica
 ## 🧾 Archivos generados
 - `data/salida/origen_validado.xlsx`
 - `data/salida/destino_marcado.xlsx`
-- `data/salida/mensajes_validacion.txt`
 
 ---
 
@@ -93,14 +71,6 @@ Pensado para **usuarios no técnicos**: puede utilizarse con **interfaz gráfica
 
 ---
 
-## 📦 Reempaquetado opcional
-Para crear nuevamente el ejecutable:
-
-```bash
-python -m PyInstaller --onefile --noconsole --name "ValidadorFacturas" --paths .\src --add-data ".\config.yaml;." --collect-all openpyxl --collect-all numpy --collect-all ttkbootstrap --hidden-import=tkinter --hidden-import=ttkbootstrap.themes --noconfirm --clean .\src\launcher_gui_bootstrap.py
-```
-
-El ejecutable se generará dentro de la carpeta `dist/`.
 
 ---
 
