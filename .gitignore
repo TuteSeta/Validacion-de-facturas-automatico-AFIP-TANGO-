@@ -1,0 +1,39 @@
+# Entornos / virtualenv
+.venv/
+.venv312/
+venv/
+env/
+ENV/
+
+# Py cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+.eggs/
+.dist-info/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build / empaquetado
+build/
+dist/
+*.spec
+
+# Datos generados
+data/salida/
+*.log
+mensajes_validacion.txt
+
+# Ejecutables y binarios
+*.exe
+*.dll
+
+# Configs locales (si querés mantener uno de ejemplo, renombrá)
+# config.yaml.local

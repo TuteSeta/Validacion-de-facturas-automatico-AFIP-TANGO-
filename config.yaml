@@ -1,0 +1,48 @@
+# Configuración inicial
+# Hoja(s) a usar en cada libro (puede ser nombre o índice)
+origen_sheet: "Sheet1"
+destino_sheet: "Hoja1"
+
+mapping:
+  afip:
+    n_comp_mode: "build"
+    tipo: "B"
+    pv:   "C"
+    num:  "D"
+    build_pattern: "{letter}{pv:05d}{num:08d}"
+    cuit:   "G"   
+    exchange_rate: "I"
+    importes:
+      neto:   "K"
+      exento: "L"
+      iva:    "N"
+      total:  "O"
+
+  tango:
+    n_comp_mode: "column"
+    n_comp_column: "N_COMP"
+    cuit:   "IDENTIFTRI"
+    nombre: "NOM_PROVE"
+    importes:
+      exento: "IMP_EXENTO"
+      neto:   "IMP_NETO"
+      iva:    "IMP_IVA"
+      total:  "IMP_TOTAL"
+
+# Solo importes (SIN nombre)
+columns:
+  - name: "IMP_EXENTO"
+    type: "number"
+    tolerance: 0.01
+  - name: "IMP_NETO"
+    type: "number"
+    tolerance: 0.01
+  - name: "IMP_IVA"
+    type: "number"
+    tolerance: 0.01
+  - name: "IMP_TOTAL"
+    type: "number"
+    tolerance: 0.01
+    
+# Formato de salida
+output_file: "outputs/destino_validado.xlsx"
