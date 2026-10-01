@@ -1,30 +1,71 @@
 import re
+from dataclasses import dataclass
 from numbers import Number
 
 import pandas as pd
 
 
-def _normalize_cuit(x):
-    if pd.isna(x):
+AMOUNT_COLUMNS = ("IMP_EXENTO", "IMP_NETO", "IMP_IVA", "IMP_TOTAL")
+PESO_ALIASES = {"$", "ARS", "PES", "PESO", "PESOS"}
+
+
+@dataclass
+class LoadResult:
+    records: pd.DataFrame
+    issues: pd.DataFrame
+
+
+def _empty_issues() -> pd.DataFrame:
+    return pd.DataFrame(columns=["FUENTE", "FILA_EXCEL", "MOTIVO", "N_COMP", "CUIT"])
+
+
+def _normalize_cuit(value):
+    if pd.isna(value):
         return pd.NA
-    value = re.sub(r"\D+", "", str(x))
-    return value if value else pd.NA
+    if isinstance(value, Number):
+        text = str(int(value))
+    else:
+        text = re.sub(r"\D+", "", str(value))
+    return text if text else pd.NA
 
 
-def _normalize_name(x):
-    return "" if pd.isna(x) else str(x).strip().upper()
+def _valid_cuit(value) -> str | None:
+    normalized = _normalize_cuit(value)
+    if pd.isna(normalized) or len(str(normalized)) != 11:
+        return None
+    return str(normalized)
 
 
-def _to_number_locale(x):
-    if pd.isna(x) or x == "":
+def _parse_number(value, decimal_separator=None, thousands_separator=None):
+    if pd.isna(value) or value == "":
         return pd.NA
-    if isinstance(x, (int, float)):
-        return float(x)
-    value = str(x).strip().replace(".", "").replace(",", ".")
-    try:
+    if isinstance(value, Number):
         return float(value)
+    text = str(value).strip().replace(" ", "")
+    if not text:
+        return pd.NA
+
+    if decimal_separator:
+        if thousands_separator:
+            text = text.replace(thousands_separator, "")
+        text = text.replace(decimal_separator, ".")
+    elif "," in text and "." in text:
+        decimal = "," if text.rfind(",") > text.rfind(".") else "."
+        thousands = "." if decimal == "," else ","
+        text = text.replace(thousands, "").replace(decimal, ".")
+    elif "," in text or "." in text:
+        separator = "," if "," in text else "."
+        decimals = len(text.rsplit(separator, 1)[1])
+        text = text.replace(separator, "." if decimals in (1, 2) else "")
+    try:
+        return float(text)
     except (TypeError, ValueError):
         return pd.NA
+
+
+def _to_number_locale(value):
+    """Parser compatible para valores textuales españoles o ingleses."""
+    return _parse_number(value)
 
 
 def _excel_col_to_index(letter: str) -> int:
@@ -35,7 +76,6 @@ def _excel_col_to_index(letter: str) -> int:
 
 
 def _resolve_col(df, key):
-    """Resuelve primero por encabezado y luego por letra de columna Excel."""
     if key is None:
         return None
     key = str(key).strip()
@@ -58,39 +98,47 @@ _DOC_CODES = {
 }
 
 
-def _tipo_to_doc_letter(value):
+def _tipo_to_doc_letter(value, *, strict=False):
     text = "" if pd.isna(value) else str(value).strip().upper()
-    match = re.search(r"\d+", text)
-    if match and int(match.group(0)) in _DOC_CODES:
-        return _DOC_CODES[int(match.group(0))]
+    code_match = re.match(r"\s*(\d+)", text)
+    if code_match:
+        code = int(code_match.group(1))
+        if code in _DOC_CODES:
+            return _DOC_CODES[code]
+        if strict:
+            raise ValueError(f"tipo de comprobante no soportado: {value}")
 
-    doc_type = "NC" if ("CRÉDITO" in text or "CREDITO" in text or text.startswith("NC")) else (
-        "ND" if ("DÉBITO" in text or "DEBITO" in text or text.startswith("ND")) else "FA"
-    )
+    doc_type = None
+    if "CRÉDITO" in text or "CREDITO" in text or text.startswith("NC"):
+        doc_type = "NC"
+    elif "DÉBITO" in text or "DEBITO" in text or text.startswith("ND"):
+        doc_type = "ND"
+    elif "FACTURA" in text or text.startswith(("FA", "FC")):
+        doc_type = "FA"
     letter_match = re.search(r"(?:^|[\s-])([ABC])(?:$|[\s-])", text)
-    return doc_type, letter_match.group(1) if letter_match else "A"
-
-
-def _tipo_to_letter(value):
-    """Compatibilidad con el código anterior."""
-    return _tipo_to_doc_letter(value)[1]
+    if doc_type and letter_match:
+        return doc_type, letter_match.group(1)
+    if strict:
+        raise ValueError(f"tipo de comprobante no reconocido: {value}")
+    return "FA", letter_match.group(1) if letter_match else "A"
 
 
 def _normalize_ncomp(value):
-    """Convierte formatos de ARCA y Odoo a ``FA-A00001-00001822``."""
     text = "" if pd.isna(value) else re.sub(r"\s+", "", str(value).strip().upper())
     match = re.fullmatch(r"(FA|FC|NC|ND)?-?([ABC])-?(\d+)-(\d+)", text)
     if match:
         doc_type = "FA" if match.group(1) in (None, "FC") else match.group(1)
-        return f"{doc_type}-{match.group(2)}{int(match.group(3)):05d}-{int(match.group(4)):08d}"
-
-    # Formato construido por ARCA o usado por el validador anterior, sin guion
-    # entre punto de venta y número. Los últimos ocho dígitos son el número.
+        pv, number = int(match.group(3)), int(match.group(4))
+        if 1 <= pv <= 99999 and 1 <= number <= 99999999:
+            return f"{doc_type}-{match.group(2)}{pv:05d}-{number:08d}"
+        return ""
     match = re.fullmatch(r"(FA|FC|NC|ND)?-?([ABC])(\d{4,5})(\d{8})", text)
     if match:
         doc_type = "FA" if match.group(1) in (None, "FC") else match.group(1)
-        return f"{doc_type}-{match.group(2)}{int(match.group(3)):05d}-{int(match.group(4)):08d}"
-    return text
+        pv, number = int(match.group(3)), int(match.group(4))
+        if pv and number:
+            return f"{doc_type}-{match.group(2)}{pv:05d}-{number:08d}"
+    return ""
 
 
 def _invoice_letter(ncomp) -> str:
@@ -98,27 +146,30 @@ def _invoice_letter(ncomp) -> str:
     return match.group(1) if match else ""
 
 
-def _to_int_safe(value):
+def _strict_positive_int(value, label):
     if pd.isna(value):
-        return 0
+        raise ValueError(f"{label} vacío")
     if isinstance(value, Number):
-        return int(value)
-    text = str(value).strip().replace(".", "").replace(",", ".")
-    try:
-        return int(float(text))
-    except (TypeError, ValueError):
-        return 0
+        numeric = float(value)
+    else:
+        try:
+            numeric = float(str(value).strip().replace(",", "."))
+        except ValueError as error:
+            raise ValueError(f"{label} inválido: {value}") from error
+    if not numeric.is_integer() or numeric <= 0:
+        raise ValueError(f"{label} inválido: {value}")
+    return int(numeric)
 
 
 def _build_ncomp_from_parts(tipo, pv, num, pattern):
-    doc_type, letter = _tipo_to_doc_letter(tipo)
-    result = pattern.format(
-        doc_type=doc_type,
-        letter=letter,
-        pv=_to_int_safe(pv),
-        num=_to_int_safe(num),
-    )
-    return _normalize_ncomp(result)
+    doc_type, letter = _tipo_to_doc_letter(tipo, strict=True)
+    pv_int = _strict_positive_int(pv, "punto de venta")
+    number_int = _strict_positive_int(num, "número")
+    if pv_int > 99999 or number_int > 99999999:
+        raise ValueError("punto de venta o número fuera de rango")
+    return _normalize_ncomp(pattern.format(
+        doc_type=doc_type, letter=letter, pv=pv_int, num=number_int
+    ))
 
 
 def _header_index(mapping: dict, default_excel_row: int) -> int:
@@ -131,7 +182,14 @@ def _as_list(spec) -> list:
     return list(spec) if isinstance(spec, (list, tuple)) else [spec]
 
 
-def _take_amount(df: pd.DataFrame, spec, *, optional_missing=False) -> pd.Series:
+def _require_column(df, key, source):
+    column = _resolve_col(df, key)
+    if column not in df.columns:
+        raise KeyError(f"No se encontró la columna requerida de {source} '{key}'.")
+    return column
+
+
+def _amount_from_row(row, df, spec, number_cfg, *, optional_missing=False):
     values = []
     for key in _as_list(spec):
         column = _resolve_col(df, key)
@@ -139,82 +197,168 @@ def _take_amount(df: pd.DataFrame, spec, *, optional_missing=False) -> pd.Series
             if optional_missing:
                 continue
             raise KeyError(f"No se encontró la columna requerida '{key}'.")
-        values.append(df[column].map(_to_number_locale))
-    if not values:
-        return pd.Series(pd.NA, index=df.index, dtype="object")
-    return pd.concat(values, axis=1).sum(axis=1, min_count=1)
+        value = _parse_number(row[column], **number_cfg)
+        if not pd.isna(row[column]) and row[column] != "" and pd.isna(value):
+            raise ValueError(f"importe inválido en '{key}': {row[column]}")
+        values.append(value)
+    present = [float(value) for value in values if not pd.isna(value)]
+    return sum(present) if present else pd.NA
 
 
-def load_afip_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
+def _issue(source, row_number, reason, ncomp="", cuit=""):
+    return {
+        "FUENTE": source,
+        "FILA_EXCEL": row_number,
+        "MOTIVO": reason,
+        "N_COMP": ncomp,
+        "CUIT": cuit,
+    }
+
+
+def load_afip_result(path: str, sheet: str, mp: dict) -> LoadResult:
     amap = mp["afip"]
-    df = pd.read_excel(path, sheet_name=sheet, header=_header_index(amap, 2))
-
-    c_tipo = _resolve_col(df, amap["tipo"])
-    c_pv = _resolve_col(df, amap["pv"])
-    c_num = _resolve_col(df, amap["num"])
-    for configured, column in ((amap["tipo"], c_tipo), (amap["pv"], c_pv), (amap["num"], c_num)):
-        if column not in df.columns:
-            raise KeyError(f"No se encontró la columna requerida de ARCA '{configured}'.")
-
-    pattern = amap.get("build_pattern", "{doc_type}-{letter}{pv:05d}{num:08d}")
-    ncomp = df.apply(
-        lambda row: _build_ncomp_from_parts(row[c_tipo], row[c_pv], row[c_num], pattern), axis=1
-    )
-    c_cuit = _resolve_col(df, amap.get("cuit"))
-    if c_cuit not in df.columns:
-        raise KeyError(f"No se encontró la columna de CUIT de ARCA '{amap.get('cuit')}'.")
-
-    c_tc = _resolve_col(df, amap.get("exchange_rate"))
-    tc = df[c_tc].map(_to_number_locale).fillna(1.0) if c_tc in df.columns else 1.0
+    header_index = _header_index(amap, 2)
+    df = pd.read_excel(path, sheet_name=sheet, header=header_index)
+    c_tipo = _require_column(df, amap["tipo"], "ARCA")
+    c_pv = _require_column(df, amap["pv"], "ARCA")
+    c_num = _require_column(df, amap["num"], "ARCA")
+    c_cuit = _require_column(df, amap["cuit"], "ARCA")
+    c_date = _require_column(df, amap.get("date", "Fecha"), "ARCA")
+    c_currency = _require_column(df, amap.get("currency", "Moneda"), "ARCA")
+    c_tc = _require_column(df, amap.get("exchange_rate", "Tipo Cambio"), "ARCA")
     amounts = amap.get("importes", {})
+    pattern = amap.get("build_pattern", "{doc_type}-{letter}{pv:05d}{num:08d}")
+    number_cfg = {
+        "decimal_separator": amap.get("decimal_separator"),
+        "thousands_separator": amap.get("thousands_separator"),
+    }
+    records, issues = [], []
+    for index, row in df.iterrows():
+        excel_row = int(index) + header_index + 2
+        ncomp, cuit = "", _valid_cuit(row[c_cuit])
+        try:
+            ncomp = _build_ncomp_from_parts(row[c_tipo], row[c_pv], row[c_num], pattern)
+            if not cuit:
+                raise ValueError(f"CUIT inválido: {row[c_cuit]}")
+            date = pd.to_datetime(row[c_date], dayfirst=True, errors="coerce")
+            if pd.isna(date):
+                raise ValueError(f"fecha inválida: {row[c_date]}")
+            currency = str(row[c_currency]).strip().upper() if not pd.isna(row[c_currency]) else ""
+            if not currency:
+                raise ValueError("moneda vacía")
+            tc_raw = _parse_number(row[c_tc], **number_cfg)
+            if currency in PESO_ALIASES:
+                currency, tc = "ARS", 1.0
+            elif pd.isna(tc_raw) or float(tc_raw) <= 0:
+                raise ValueError(f"tipo de cambio inválido para {currency}: {row[c_tc]}")
+            else:
+                tc = float(tc_raw)
+            record = {
+                "FUENTE": "ARCA", "FILA_EXCEL": excel_row, "FILAS_EXCEL": (excel_row,),
+                "FECHA": date.normalize(), "MONEDA": currency, "N_COMP": ncomp,
+                "IDENTIFTRI": cuit, "TC": tc,
+            }
+            record.update({
+                "IMP_EXENTO": _amount_from_row(row, df, amounts.get("exento"), number_cfg),
+                "IMP_NETO": _amount_from_row(row, df, amounts.get("neto"), number_cfg),
+                "IMP_IVA": _amount_from_row(row, df, amounts.get("iva"), number_cfg),
+                "IMP_TOTAL": _amount_from_row(row, df, amounts.get("total"), number_cfg),
+            })
+            if pd.isna(record["IMP_TOTAL"]):
+                raise ValueError("importe total vacío")
+            if ncomp.startswith("NC-"):
+                for column in AMOUNT_COLUMNS:
+                    if not pd.isna(record[column]):
+                        record[column] *= -1
+            records.append(record)
+        except (KeyError, ValueError) as error:
+            issues.append(_issue("ARCA", excel_row, str(error), ncomp, cuit or ""))
 
-    out = pd.DataFrame(index=df.index)
-    out["N_COMP"] = ncomp
-    out["IDENTIFTRI"] = df[c_cuit].map(_normalize_cuit)
-    out["TC"] = tc
-    out["IMP_EXENTO"] = _take_amount(df, amounts.get("exento"))
-    out["IMP_NETO"] = _take_amount(df, amounts.get("neto"))
-    out["IMP_IVA"] = _take_amount(df, amounts.get("iva"))
-    out["IMP_TOTAL"] = _take_amount(df, amounts.get("total"))
-
-    # ARCA informa NC positivas; Odoo las contabiliza con signo negativo.
-    credit_mask = out["N_COMP"].str.startswith("NC-")
-    amount_columns = ["IMP_EXENTO", "IMP_NETO", "IMP_IVA", "IMP_TOTAL"]
-    out.loc[credit_mask, amount_columns] = out.loc[credit_mask, amount_columns] * -1
-    return out.reset_index(drop=True)
+    records_df = pd.DataFrame(records)
+    if not records_df.empty:
+        duplicate_mask = records_df.duplicated(["N_COMP", "IDENTIFTRI"], keep=False)
+        for _, duplicate in records_df[duplicate_mask].iterrows():
+            issues.append(_issue(
+                "ARCA", duplicate["FILA_EXCEL"], "clave de comprobante duplicada",
+                duplicate["N_COMP"], duplicate["IDENTIFTRI"],
+            ))
+        records_df = records_df[~duplicate_mask].reset_index(drop=True)
+    return LoadResult(records_df, pd.DataFrame(issues) if issues else _empty_issues())
 
 
-def load_odoo_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
+def load_odoo_result(path: str, sheet: str, mp: dict) -> LoadResult:
     omap = mp.get("odoo") or mp.get("tango")
     if not omap:
         raise KeyError("Falta 'mapping.odoo' en config.yaml.")
-    df = pd.read_excel(path, sheet_name=sheet, header=_header_index(omap, 3))
-
-    c_ncomp = _resolve_col(df, omap["n_comp_column"])
-    c_cuit = _resolve_col(df, omap.get("cuit", "CUIT"))
-    for configured, column in ((omap["n_comp_column"], c_ncomp), (omap.get("cuit", "CUIT"), c_cuit)):
-        if column not in df.columns:
-            raise KeyError(f"No se encontró la columna requerida de Odoo '{configured}'.")
-
+    header_index = _header_index(omap, 3)
+    df = pd.read_excel(path, sheet_name=sheet, header=header_index)
+    c_ncomp = _require_column(df, omap["n_comp_column"], "Odoo")
+    c_cuit = _require_column(df, omap.get("cuit", "CUIT"), "Odoo")
+    c_date = _require_column(df, omap.get("date", "Fecha"), "Odoo")
     amounts = omap.get("importes", {})
-    out = pd.DataFrame(index=df.index)
-    out["N_COMP"] = df[c_ncomp].map(_normalize_ncomp)
-    out["IDENTIFTRI"] = df[c_cuit].map(_normalize_cuit)
-    out["IMP_EXENTO"] = _take_amount(df, amounts.get("exento"), optional_missing=True)
-    out["IMP_NETO"] = _take_amount(df, amounts.get("neto"))
-    out["IMP_IVA"] = _take_amount(df, amounts.get("iva"), optional_missing=True)
-    out["IMP_TOTAL"] = _take_amount(df, amounts.get("total"))
+    number_cfg = {
+        "decimal_separator": omap.get("decimal_separator"),
+        "thousands_separator": omap.get("thousands_separator"),
+    }
+    records, issues = [], []
+    for index, row in df.iterrows():
+        excel_row = int(index) + header_index + 2
+        ncomp = _normalize_ncomp(row[c_ncomp])
+        cuit = _valid_cuit(row[c_cuit])
+        try:
+            if not ncomp:
+                raise ValueError(f"número de comprobante inválido: {row[c_ncomp]}")
+            if not cuit:
+                raise ValueError(f"CUIT inválido: {row[c_cuit]}")
+            date = pd.to_datetime(row[c_date], dayfirst=True, errors="coerce")
+            if pd.isna(date):
+                raise ValueError(f"fecha inválida: {row[c_date]}")
+            record = {
+                "FUENTE": "ODOO", "FILA_EXCEL": excel_row, "FILAS_EXCEL": (excel_row,),
+                "FECHA": date.normalize(), "MONEDA": "ARS", "N_COMP": ncomp,
+                "IDENTIFTRI": cuit, "TC": 1.0,
+            }
+            record.update({
+                "IMP_EXENTO": _amount_from_row(row, df, amounts.get("exento"), number_cfg, optional_missing=True),
+                "IMP_NETO": _amount_from_row(row, df, amounts.get("neto"), number_cfg),
+                "IMP_IVA": _amount_from_row(row, df, amounts.get("iva"), number_cfg, optional_missing=True),
+                "IMP_TOTAL": _amount_from_row(row, df, amounts.get("total"), number_cfg),
+            })
+            if pd.isna(record["IMP_TOTAL"]):
+                raise ValueError("importe total vacío")
+            records.append(record)
+        except (KeyError, ValueError) as error:
+            issues.append(_issue("ODOO", excel_row, str(error), ncomp, cuit or ""))
 
-    out = out[out["N_COMP"].astype(str).str.len().gt(0)]
-    return (
-        out.groupby(["N_COMP", "IDENTIFTRI"], dropna=False)[
-            ["IMP_EXENTO", "IMP_NETO", "IMP_IVA", "IMP_TOTAL"]
-        ]
-        .sum(min_count=1)
-        .reset_index()
-    )
+    records_df = pd.DataFrame(records)
+    if not records_df.empty:
+        grouped = []
+        for (_, _), group in records_df.groupby(["N_COMP", "IDENTIFTRI"], sort=False):
+            first = group.iloc[0].to_dict()
+            first["FILA_EXCEL"] = int(group["FILA_EXCEL"].min())
+            first["FILAS_EXCEL"] = tuple(int(value) for value in group["FILA_EXCEL"])
+            if group["FECHA"].nunique() > 1:
+                for row_number in first["FILAS_EXCEL"]:
+                    issues.append(_issue(
+                        "ODOO", row_number, "misma clave con fechas diferentes",
+                        first["N_COMP"], first["IDENTIFTRI"],
+                    ))
+                continue
+            for column in AMOUNT_COLUMNS:
+                first[column] = group[column].sum(min_count=1)
+            grouped.append(first)
+        records_df = pd.DataFrame(grouped)
+    return LoadResult(records_df.reset_index(drop=True), pd.DataFrame(issues) if issues else _empty_issues())
+
+
+def load_afip_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
+    return load_afip_result(path, sheet, mp).records
+
+
+def load_odoo_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
+    return load_odoo_result(path, sheet, mp).records
 
 
 def load_tango_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
-    """Alias temporal para integraciones que usaban el nombre anterior."""
+    """Alias obsoleto conservado temporalmente para integraciones externas."""
     return load_odoo_with_map(path, sheet, mp)

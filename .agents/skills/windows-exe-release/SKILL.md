@@ -10,9 +10,10 @@ built on Linux is a Linux executable even if its filename ends in `.exe`. If a
 Windows runner is unavailable, prepare the reproducible build configuration and
 state that the checked-in EXE was not replaced.
 
-The entry point is `launcher_gui_bootstrap.py`. Bundle `config.yaml` at the bundle
-root because `src.main._base_dir()` resolves it through `sys._MEIPASS` in a frozen
-application. Include `src` imports and ttkbootstrap assets detected by PyInstaller.
+The entry point is `launcher_gui_bootstrap.py`. Bundle `config.yaml` as fallback and
+also copy it beside the EXE; the external file takes priority so mappings can change
+without rebuilding. Include `src` imports and ttkbootstrap assets detected by
+PyInstaller.
 
 Use a clean virtual environment, install pinned runtime dependencies plus a pinned
 PyInstaller version, and build through the repository's checked-in spec or build

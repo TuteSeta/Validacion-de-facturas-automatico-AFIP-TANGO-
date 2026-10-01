@@ -12,6 +12,9 @@ de ARCA con el reporte **Libro de IVA argentino** de Odoo.
 - Para comprobantes B y C compara el total, ya que ARCA no siempre discrimina sus
   componentes de la misma forma que Odoo.
 - Para comprobantes A compara neto gravado, IVA, otros conceptos y total.
+- Concilia en ambos sentidos: faltantes en Odoo y faltantes en ARCA.
+- Separa las filas Odoo fuera del rango de fechas cubierto por ARCA.
+- Excluye datos inválidos del cruce y los informa sin detener las filas válidas.
 
 El mapeo de hojas, filas de encabezado y columnas está en `config.yaml` para poder
 adaptarlo si cambia una exportación.
@@ -60,10 +63,17 @@ Si se dejan vacíos los nombres de hoja, se usan `Sheet1` para ARCA y
 
 ## Resultados
 
-- `origen_validado.xlsx`: copia tabular de ARCA con cada fila en verde
-  (coincide), rojo (difiere) o amarillo (no existe en Odoo).
-- `odoo_validado.xlsx`: copia del reporte original de Odoo; los importes que
-  difieren quedan resaltados en amarillo, sin alterar el archivo original.
+Cada ejecución crea una carpeta `Validacion_AAAAMMDD_HHMMSS` con:
+
+- `origen_validado.xlsx`: copia completa del libro ARCA, conservando formato y hojas.
+- `odoo_validado.xlsx`: copia completa de Odoo con estados e importes diferentes.
+- `reporte_validacion.xlsx`: resumen, conciliación, incidencias y filas Odoo fuera
+  del período.
+- `validacion.log`: archivos usados, período y métricas de la ejecución.
+
+Los estados usan verde para coincidencias, rojo para diferencias, amarillo para
+faltantes, naranja para inválidos y gris para filas fuera del período. La carpeta se
+publica únicamente cuando los cuatro archivos terminan correctamente.
 
 ## Desarrollo y prueba por consola
 
@@ -98,3 +108,5 @@ El análisis técnico vigente está en `ANALISIS_CODIGO.md`.
   exportaciones indicadas o actualizá `config.yaml`.
 - **Comprobante omitido**: está en ARCA pero todavía no se encontró en Odoo con el
   mismo tipo, número y CUIT.
+- **Validación fallida**: el diálogo muestra la ruta de un log técnico creado en la
+  carpeta de salida; no quedan Excel parciales.

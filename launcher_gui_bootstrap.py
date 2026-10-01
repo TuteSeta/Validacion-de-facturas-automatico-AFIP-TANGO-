@@ -169,11 +169,14 @@ class App(ttk.Window):
         """Se ejecuta en el hilo principal cuando la validación es exitosa."""
         self._reset_ui_state()
         resumen = (
-            f"✔ Destino validado: {result['destino_validado']}\n"
-            f"✔ Origen validado: {result['origen_validado']}\n"
+            f"✔ Resultados: {result['run_dir']}\n"
+            f"✔ Reporte: {result['reporte_validacion']}\n"
             f"\n✔ Coinciden: {result['coincidencias']}\n"
             f"✖ Con diferencias: {result['diferencias']}\n"
-            + (f"⚠ No encontrados en Odoo: {result['faltantes']}\n" if result['faltantes'] else "✔ Todos los comprobantes existen en Odoo.\n")
+            f"⚠ Faltan en Odoo: {result['faltantes_en_odoo']}\n"
+            f"⚠ Faltan en ARCA: {result['faltantes_en_arca']}\n"
+            f"⚠ Inválidos: {result['invalidos_arca'] + result['invalidos_odoo']}\n"
+            f"ℹ Odoo fuera del período: {result['fuera_periodo_odoo']}\n"
         )
         self.status_text.set("¡Validación completada con éxito!")
         messagebox.showinfo("Proceso Terminado", resumen)
@@ -190,7 +193,7 @@ class App(ttk.Window):
         self.validate_button.config(state="normal", text="🚀 Validar Facturas")
 
 def main():
-    app = App(title="Validador de Facturas ARCA ↔ Odoo v3.0", size="600x500")
+    app = App(title="Validador de Facturas ARCA ↔ Odoo v4.0", size="600x500")
     app.mainloop()
 
 if __name__ == "__main__":

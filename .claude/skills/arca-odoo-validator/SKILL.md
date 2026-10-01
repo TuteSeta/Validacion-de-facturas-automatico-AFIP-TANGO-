@@ -17,16 +17,19 @@ changed:
 - Do not collapse invoices, credit notes, and debit notes into the same identifier.
 - ARCA credit-note amounts are converted to Odoo's negative accounting sign.
 - Apply ARCA's exchange rate before comparing monetary values.
+- Reject invalid document keys and require a positive exchange rate for non-ARS
+  currencies; invalid rows are incidents and never enter reconciliation.
 - For B and C documents compare the total because ARCA does not reliably expose the
   same tax breakdown as Odoo. For A documents compare net, VAT, other amounts, and
   total.
-- Never modify either input workbook. Preserve Odoo's sheets and formatting in its
-  validated copy.
+- Reconcile in both directions within ARCA's inclusive date range. Classify Odoo
+  outside that range separately.
+- Never modify either input workbook. Preserve every sheet and existing formatting
+  in both validated copies.
 
-When changing behavior, keep normalization in `src/transform.py`, comparisons in
-`src/compare.py`, and workbook presentation in `src/origen_validated.py` or
-`src/mark_dest.py`. Avoid implementing the same rule independently in multiple
-places; if an existing duplication must change, update and test every caller.
+Keep normalization in `src/transform.py` and all business comparisons exclusively in
+`src/compare.py`. Workbook writers must consume the structured reconciliation result
+and must not reimplement tolerances, currency conversion, or field selection.
 
 Run `python -m unittest discover -s tests -v`, compile the sources, and exercise
 `src.main.run_validation` against the current real exports when they are available.

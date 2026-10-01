@@ -12,7 +12,9 @@ mapping:
     pv: "Punto de Venta"
     num: "Número Desde"
     build_pattern: "{doc_type}-{letter}{pv:05d}{num:08d}"
+    date: "Fecha"
     cuit: "Nro. Doc. Emisor"
+    currency: "Moneda"
     exchange_rate: "Tipo Cambio"
     importes:
       exento:
@@ -28,6 +30,7 @@ mapping:
     n_comp_mode: "column"
     # En el reporte de Odoo esta columna no tiene encabezado.
     n_comp_column: "A"
+    date: "Fecha"
     cuit: "CUIT"
     nombre: "Nombre"
     importes:

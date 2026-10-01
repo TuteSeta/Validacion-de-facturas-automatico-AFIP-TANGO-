@@ -1,153 +1,160 @@
+import shutil
 import sys
-import yaml
+import tempfile
+import traceback
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
-from src.transform import load_afip_with_map, load_odoo_with_map
-from src.compare import compare_and_messages
+import yaml
+
+from src.compare import messages_from_result, reconcile
+from src.mark_dest import write_odoo_validado
 from src.origen_validated import write_origen_validado
-from src.mark_dest import mark_and_append
+from src.output_report import write_consolidated_report
+from src.transform import load_afip_result, load_odoo_result
+
+
+APP_VERSION = "4.0"
 
 
 def _base_dir() -> Path:
-    """
-    Devuelve la carpeta base del proyecto en dev o la carpeta temporal
-    del bundle cuando está empaquetado (sys._MEIPASS).
-    """
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)  
+        return Path(sys._MEIPASS)
     return Path(__file__).resolve().parents[1]
 
 
 def _executable_dir() -> Path:
-    """Carpeta visible junto al EXE, o raíz del proyecto en desarrollo."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[1]
 
 
 def _load_config(config_path: Optional[str] = None) -> dict:
-    """
-    Busca config.yaml en:
-    1) Ruta explícita (si se pasa),
-    2) Carpeta base (_base_dir()),
-    3) Directorio actual (cwd) como último recurso.
-    """
     candidates = []
     if config_path:
         candidates.append(Path(config_path))
-    # Un config junto al EXE permite ajustar futuras exportaciones sin recompilar.
-    candidates.append(_executable_dir() / "config.yaml")
-    candidates.append(_base_dir() / "config.yaml")
-    candidates.append(Path.cwd() / "config.yaml")
-
-    for p in dict.fromkeys(candidates):
-        if p.exists():
-            return yaml.safe_load(p.read_text(encoding="utf-8"))
-
+    candidates.extend([
+        _executable_dir() / "config.yaml",
+        _base_dir() / "config.yaml",
+        Path.cwd() / "config.yaml",
+    ])
+    for path in dict.fromkeys(candidates):
+        if path.exists():
+            config = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if not isinstance(config, dict) or "mapping" not in config:
+                raise ValueError(f"Configuración inválida: {path}")
+            return config
     raise FileNotFoundError("No se encontró config.yaml en ninguna ubicación conocida.")
 
 
-# --- API para la GUI (importa launcher_gui_bootstrap.py) ---
+def _available_run_dir(output_dir: Path, stamp: str) -> Path:
+    base = output_dir / f"Validacion_{stamp}"
+    candidate, suffix = base, 1
+    while candidate.exists():
+        candidate = output_dir / f"{base.name}_{suffix:02d}"
+        suffix += 1
+    return candidate
+
+
+def _success_log(reconciliation, source_paths):
+    metrics = reconciliation.metrics
+    lines = [
+        f"Validador ARCA–Odoo v{APP_VERSION}",
+        f"Fecha de ejecución: {datetime.now():%d/%m/%Y %H:%M:%S}",
+        f"ARCA: {source_paths['arca']}",
+        f"Odoo: {source_paths['odoo']}",
+        f"Período: {reconciliation.period_start:%d/%m/%Y}–{reconciliation.period_end:%d/%m/%Y}",
+    ]
+    lines.extend(f"{key}: {value}" for key, value in metrics.items())
+    return "\n".join(lines) + "\n"
+
+
 def run_validation(
     origen_path: str,
     destino_path: str,
     origen_sheet: Optional[str] = None,
     destino_sheet: Optional[str] = None,
     output_dir: Optional[str] = None,
+    config_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Ejecuta todo el pipeline usando tu lógica actual
-    y devuelve paths de salida + métricas para la GUI.
-    """
-    cfg = _load_config()
+    cfg = _load_config(config_path)
+    origen_sheet = origen_sheet or cfg.get("origen_sheet", "Sheet1")
+    destino_sheet = destino_sheet or cfg.get("destino_sheet", "Libro de IVA argentino")
+    mapping = cfg["mapping"]
+    columns_cfg = cfg.get("columns", [])
+    tolerances = {column["name"]: float(column.get("tolerance", 0.0)) for column in columns_cfg}
 
-    origen_sheet  = origen_sheet  or cfg.get("origen_sheet", "Sheet1")
-    destino_sheet = destino_sheet or cfg.get("destino_sheet", "Hoja1")
-    mapping       = cfg["mapping"]
+    output_root = Path(output_dir) if output_dir else (_executable_dir() / "outputs")
+    output_root.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    final_dir = _available_run_dir(output_root, stamp)
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{final_dir.name}_", dir=output_root))
 
-    # 1) Normalizamos ARCA/Odoo según el mapeo
-    df_afip  = load_afip_with_map(origen_path,  origen_sheet,  mapping)
-    df_odoo = load_odoo_with_map(destino_path, destino_sheet, mapping)
+    try:
+        arca_result = load_afip_result(origen_path, origen_sheet, mapping)
+        odoo_result = load_odoo_result(destino_path, destino_sheet, mapping)
+        reconciliation = reconcile(arca_result, odoo_result, tolerances)
+        messages = messages_from_result(reconciliation)
 
-    # 2) Columnas a comparar 
-    columns_cfg = cfg.get("columns", [
-        {"name": "IMP_EXENTO", "type": "number", "tolerance": 0.01},
-        {"name": "IMP_NETO",   "type": "number", "tolerance": 0.01},
-        {"name": "IMP_IVA",    "type": "number", "tolerance": 0.01},
-        {"name": "IMP_TOTAL",  "type": "number", "tolerance": 0.01},
-    ])
+        arca_output = staging_dir / "origen_validado.xlsx"
+        odoo_output = staging_dir / "odoo_validado.xlsx"
+        report_output = staging_dir / "reporte_validacion.xlsx"
+        log_output = staging_dir / "validacion.log"
+        write_origen_validado(
+            origen_path, origen_sheet, mapping, reconciliation, arca_output
+        )
+        write_odoo_validado(
+            destino_path, destino_sheet, mapping, reconciliation, odoo_output
+        )
+        write_consolidated_report(
+            report_output,
+            reconciliation,
+            {"arca": Path(origen_path).name, "odoo": Path(destino_path).name},
+        )
+        log_output.write_text(
+            _success_log(reconciliation, {"arca": origen_path, "odoo": destino_path}),
+            encoding="utf-8",
+        )
 
-    # 3) Mensajes
-    tolerances = {c["name"]: float(c.get("tolerance", 0.0)) for c in columns_cfg}
-    msgs = compare_and_messages(
-        origen_df=df_afip,
-        destino_df=df_odoo,
-        tolerances=tolerances,
-    )
-    for m in msgs:
-        print(m)
-
-    # 4) Generamos copia del destino con marcas visuales
-    out_dir = Path(output_dir) if output_dir else (_base_dir() / "outputs")
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    destino_validado_name = Path(cfg.get("output_file", "destino_validado.xlsx")).name
-    destino_validado_path = out_dir / destino_validado_name
-
-    faltantes, destino_guardado = mark_and_append(
-        origen_df=df_afip,
-        destino_xlsx_path=destino_path,
-        destino_sheet=destino_sheet,
-        columns_cfg=columns_cfg,
-        out_path=str(destino_validado_path),
-        mapping=mapping,
-    )
-
-    # 5) Origen validado
-    origen_validado_path = out_dir / "origen_validado.xlsx"
-    write_origen_validado(
-        origen_path=origen_path,
-        sheet=origen_sheet,
-        mapping=mapping,
-        destino_df=df_odoo,
-        tolerances=tolerances,
-        out_path=str(origen_validado_path),
-    )
-
-    return {
-        "destino_validado": destino_guardado,
-        "origen_validado":  str(origen_validado_path),
-        "faltantes":        int(faltantes),
-        "coincidencias":    sum(message.startswith("✅") for message in msgs),
-        "diferencias":      sum(message.startswith("❌") for message in msgs),
-        "mensajes":         msgs,
-    }
+        staging_dir.replace(final_dir)
+        metrics = reconciliation.metrics
+        result = {
+            "run_dir": str(final_dir),
+            "destino_validado": str(final_dir / odoo_output.name),
+            "origen_validado": str(final_dir / arca_output.name),
+            "reporte_validacion": str(final_dir / report_output.name),
+            "log": str(final_dir / log_output.name),
+            "faltantes": metrics["faltantes_en_odoo"],
+            **metrics,
+            "periodo": {
+                "desde": reconciliation.period_start.date().isoformat(),
+                "hasta": reconciliation.period_end.date().isoformat(),
+            },
+            "mensajes": messages,
+        }
+        for message in messages:
+            print(message)
+        return result
+    except Exception as error:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        error_log = output_root / f"validacion_error_{stamp}.log"
+        error_log.write_text(
+            f"Validador ARCA–Odoo v{APP_VERSION}\n{traceback.format_exc()}",
+            encoding="utf-8",
+        )
+        raise RuntimeError(
+            f"La validación falló. Detalle técnico: {error_log}"
+        ) from error
 
 
-# --- Modo CLI ---
 def main():
-    cfg = _load_config()
-
-    origen_path   = str(_base_dir() / "data" / "origen.xlsx")
-    destino_path  = str(_base_dir() / "data" / "destino.xlsx")
-    origen_sheet  = cfg.get("origen_sheet", "Sheet1")
-    destino_sheet = cfg.get("destino_sheet", "Hoja1")
-
     result = run_validation(
-        origen_path=origen_path,
-        destino_path=destino_path,
-        origen_sheet=origen_sheet,
-        destino_sheet=destino_sheet,
+        origen_path=str(_base_dir() / "data" / "origen.xlsx"),
+        destino_path=str(_base_dir() / "data" / "destino.xlsx"),
         output_dir=str(_base_dir() / "outputs"),
     )
-
-    print(f"✅ Archivo de salida (destino): {result['destino_validado']}")
-    print(f"✅ Archivo de salida (origen) : {result['origen_validado']}")
-    if result["faltantes"]:
-        print(f"⚠️ Hay {result['faltantes']} comprobante(s) de ARCA sin coincidencia en Odoo.")
-    else:
-        print("✅ Todos los comprobantes de ARCA existen al menos una vez en Odoo.")
+    print(f"Resultados: {result['run_dir']}")
 
 
 if __name__ == "__main__":

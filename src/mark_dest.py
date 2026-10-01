@@ -1,25 +1,24 @@
-from datetime import datetime
-from pathlib import Path
-
-import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import column_index_from_string
 
-from src.transform import (
-    _as_list,
-    _invoice_letter,
-    _normalize_cuit,
-    _normalize_ncomp,
-    _to_number_locale,
+from src.compare import (
+    STATUS_DIFFERENT,
+    STATUS_INVALID,
+    STATUS_MATCH,
+    STATUS_MISSING_ARCA,
+    STATUS_OUT_OF_PERIOD,
 )
+from src.transform import _as_list
 
 
-YELLOW = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
-
-
-def _is_number(value):
-    return isinstance(value, (int, float)) and not pd.isna(value)
+FILLS = {
+    STATUS_MATCH: PatternFill("solid", fgColor="C8E6C9"),
+    STATUS_DIFFERENT: PatternFill("solid", fgColor="FFCDD2"),
+    STATUS_MISSING_ARCA: PatternFill("solid", fgColor="FFF59D"),
+    STATUS_INVALID: PatternFill("solid", fgColor="FFCC80"),
+    STATUS_OUT_OF_PERIOD: PatternFill("solid", fgColor="D9E1F2"),
+}
 
 
 def _column_indexes(worksheet, spec, header_row, *, optional=False):
@@ -40,107 +39,59 @@ def _column_indexes(worksheet, spec, header_row, *, optional=False):
     return indexes
 
 
-def _aggregate_cells(worksheet, rows, columns):
-    values = []
-    for row in rows:
-        for column in columns:
-            value = _to_number_locale(worksheet.cell(row=row, column=column).value)
-            if _is_number(value):
-                values.append(float(value))
-    return sum(values) if values else pd.NA
-
-
-def _mark_cell(cell):
-    cell.fill = YELLOW
-    cell.font = Font(
-        name=cell.font.name,
-        size=cell.font.sz,
-        bold=True,
-        italic=cell.font.italic,
-        underline="single",
-        color=cell.font.color,
-    )
-
-
-def mark_and_append(
-    origen_df: pd.DataFrame,
-    destino_xlsx_path: str,
-    destino_sheet: str,
-    columns_cfg: list,
-    out_path: str,
-    mapping: dict,
-):
-    """Marca en amarillo los importes de Odoo que difieren de ARCA."""
-    try:
-        workbook = load_workbook(destino_xlsx_path)
-    except PermissionError as error:
-        raise PermissionError(
-            f"No se pudo abrir '{destino_xlsx_path}'. Cerrá el archivo si está abierto en Excel."
-        ) from error
-
-    if destino_sheet not in workbook.sheetnames:
-        raise ValueError(f"No existe la hoja '{destino_sheet}' en {destino_xlsx_path}")
-    worksheet = workbook[destino_sheet]
-    omap = mapping.get("odoo") or mapping.get("tango")
+def write_odoo_validado(destino_path, sheet, mapping, reconciliation, out_path):
+    """Copia Odoo, agrega estados y resalta únicamente los importes diferentes."""
+    workbook = load_workbook(destino_path)
+    if sheet not in workbook.sheetnames:
+        raise ValueError(f"No existe la hoja '{sheet}' en {destino_path}")
+    worksheet = workbook[sheet]
+    omap = mapping.get("odoo") or mapping["tango"]
     header_row = int(omap.get("header_row", 3))
+    status_column = worksheet.max_column + 1
+    detail_column = status_column + 1
+    worksheet.cell(header_row, status_column, "Estado_Validación").font = Font(bold=True)
+    worksheet.cell(header_row, detail_column, "Detalle_Validación").font = Font(bold=True)
 
-    ncomp_column = _column_indexes(worksheet, omap["n_comp_column"], header_row)[0]
-    cuit_column = _column_indexes(worksheet, omap.get("cuit", "CUIT"), header_row)[0]
-    amount_mapping = omap.get("importes", {})
     field_specs = {
-        "IMP_EXENTO": amount_mapping.get("exento"),
-        "IMP_NETO": amount_mapping.get("neto"),
-        "IMP_IVA": amount_mapping.get("iva"),
-        "IMP_TOTAL": amount_mapping.get("total"),
+        "IMP_EXENTO": omap.get("importes", {}).get("exento"),
+        "IMP_NETO": omap.get("importes", {}).get("neto"),
+        "IMP_IVA": omap.get("importes", {}).get("iva"),
+        "IMP_TOTAL": omap.get("importes", {}).get("total"),
     }
     field_columns = {
         field: _column_indexes(worksheet, spec, header_row, optional=True)
         for field, spec in field_specs.items()
     }
 
-    key_to_rows = {}
-    for row_number in range(header_row + 1, worksheet.max_row + 1):
-        ncomp = _normalize_ncomp(worksheet.cell(row_number, ncomp_column).value)
-        cuit = _normalize_cuit(worksheet.cell(row_number, cuit_column).value)
-        cuit = "" if pd.isna(cuit) else str(cuit)
-        if ncomp:
-            key_to_rows.setdefault((ncomp, cuit), []).append(row_number)
-
-    tolerance_by_field = {
-        column["name"]: float(column.get("tolerance", 0.0)) for column in columns_cfg
-    }
-    missing_count = 0
-    for _, source_row in origen_df.iterrows():
-        ncomp = _normalize_ncomp(source_row["N_COMP"])
-        cuit = _normalize_cuit(source_row["IDENTIFTRI"])
-        rows = key_to_rows.get((ncomp, "" if pd.isna(cuit) else str(cuit)), [])
-        if not rows:
-            missing_count += 1
-            continue
-
-        fields = ["IMP_TOTAL"] if _invoice_letter(ncomp) in ("B", "C") else list(field_specs)
-        tc = _to_number_locale(source_row.get("TC", 1.0))
-        tc = float(tc) if _is_number(tc) else 1.0
-        for field in fields:
-            target = _aggregate_cells(worksheet, rows, field_columns[field])
-            source = _to_number_locale(source_row[field])
-            source = source * tc if _is_number(source) else source
-            matches = (pd.isna(source) and pd.isna(target)) or (
-                _is_number(source)
-                and _is_number(target)
-                and abs(source - target) <= tolerance_by_field.get(field, 0.0) + 1e-9
+    row_results = {}
+    for _, result in reconciliation.details.iterrows():
+        for row_number in result.get("FILAS_ODOO", ()) or ():
+            row_results[int(row_number)] = (
+                result["ESTADO"], result["DETALLE"], result["CAMPOS_DIFERENTES"]
             )
-            if not matches:
-                for row_number in rows:
-                    for column_number in field_columns[field]:
-                        _mark_cell(worksheet.cell(row=row_number, column=column_number))
+    for _, record in reconciliation.out_of_period.iterrows():
+        detail = (
+            f"Fecha fuera del rango ARCA "
+            f"{reconciliation.period_start:%d/%m/%Y}–{reconciliation.period_end:%d/%m/%Y}."
+        )
+        for row_number in record["FILAS_EXCEL"]:
+            row_results[int(row_number)] = (STATUS_OUT_OF_PERIOD, detail, "")
+    if not reconciliation.issues.empty:
+        for _, issue in reconciliation.issues[reconciliation.issues["FUENTE"] == "ODOO"].iterrows():
+            row_results[int(issue["FILA_EXCEL"])] = (STATUS_INVALID, issue["MOTIVO"], "")
 
-    output = Path(out_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        workbook.save(output)
-    except PermissionError:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output = output.with_name(f"{output.stem}_{stamp}{output.suffix}")
-        workbook.save(output)
-    return missing_count, str(output)
+    for row_number, (status, detail, different_fields) in row_results.items():
+        worksheet.cell(row_number, status_column, status)
+        worksheet.cell(row_number, detail_column, detail)
+        fill = FILLS.get(status)
+        if fill:
+            worksheet.cell(row_number, status_column).fill = fill
+            worksheet.cell(row_number, detail_column).fill = fill
+        if status == STATUS_DIFFERENT:
+            fields = (value.strip() for value in different_fields.split(","))
+            for field in filter(None, fields):
+                for column_number in field_columns.get(field, []):
+                    worksheet.cell(row_number, column_number).fill = FILLS[STATUS_DIFFERENT]
+                    worksheet.cell(row_number, column_number).font = Font(bold=True, underline="single")
+
+    workbook.save(out_path)
