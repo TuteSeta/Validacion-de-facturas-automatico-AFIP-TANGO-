@@ -1,0 +1,4 @@
+interface:
+  display_name: "Validador ARCA Odoo"
+  short_description: "Mantener y verificar la validación de facturas"
+  default_prompt: "Usa $arca-odoo-validator para actualizar o diagnosticar el validador ARCA–Odoo."

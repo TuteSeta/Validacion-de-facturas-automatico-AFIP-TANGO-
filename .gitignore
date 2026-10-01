@@ -24,11 +24,16 @@ Thumbs.db
 # Build / empaquetado
 build/
 *.spec
+!ValidadorFacturas.spec
+.venv-windows/
+dist-build/
 
 # Datos generados
 data/salida/
 *.log
 mensajes_validacion.txt
+.coverage
+htmlcov/
 
 # Ejecutables y binarios
 *.dll

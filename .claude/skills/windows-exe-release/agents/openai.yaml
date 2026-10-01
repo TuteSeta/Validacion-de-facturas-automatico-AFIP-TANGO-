@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release EXE Windows"
+  short_description: "Construir y verificar el ejecutable Windows"
+  default_prompt: "Usa $windows-exe-release para construir y verificar el EXE del validador."

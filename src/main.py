@@ -3,7 +3,7 @@ import yaml
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from src.transform import load_afip_with_map, load_tango_with_map
+from src.transform import load_afip_with_map, load_odoo_with_map
 from src.compare import compare_and_messages
 from src.origen_validated import write_origen_validado
 from src.mark_dest import mark_and_append
@@ -19,6 +19,13 @@ def _base_dir() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _executable_dir() -> Path:
+    """Carpeta visible junto al EXE, o raíz del proyecto en desarrollo."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
+
+
 def _load_config(config_path: Optional[str] = None) -> dict:
     """
     Busca config.yaml en:
@@ -29,11 +36,12 @@ def _load_config(config_path: Optional[str] = None) -> dict:
     candidates = []
     if config_path:
         candidates.append(Path(config_path))
-    base = _base_dir()
-    candidates.append(base / "config.yaml")
+    # Un config junto al EXE permite ajustar futuras exportaciones sin recompilar.
+    candidates.append(_executable_dir() / "config.yaml")
+    candidates.append(_base_dir() / "config.yaml")
     candidates.append(Path.cwd() / "config.yaml")
 
-    for p in candidates:
+    for p in dict.fromkeys(candidates):
         if p.exists():
             return yaml.safe_load(p.read_text(encoding="utf-8"))
 
@@ -58,9 +66,9 @@ def run_validation(
     destino_sheet = destino_sheet or cfg.get("destino_sheet", "Hoja1")
     mapping       = cfg["mapping"]
 
-    # 1) Normalizamos AFIP/Tango según el mapeo
+    # 1) Normalizamos ARCA/Odoo según el mapeo
     df_afip  = load_afip_with_map(origen_path,  origen_sheet,  mapping)
-    df_tango = load_tango_with_map(destino_path, destino_sheet, mapping)
+    df_odoo = load_odoo_with_map(destino_path, destino_sheet, mapping)
 
     # 2) Columnas a comparar 
     columns_cfg = cfg.get("columns", [
@@ -74,7 +82,7 @@ def run_validation(
     tolerances = {c["name"]: float(c.get("tolerance", 0.0)) for c in columns_cfg}
     msgs = compare_and_messages(
         origen_df=df_afip,
-        destino_df=df_tango,
+        destino_df=df_odoo,
         tolerances=tolerances,
     )
     for m in msgs:
@@ -87,12 +95,13 @@ def run_validation(
     destino_validado_name = Path(cfg.get("output_file", "destino_validado.xlsx")).name
     destino_validado_path = out_dir / destino_validado_name
 
-    faltantes = mark_and_append(
+    faltantes, destino_guardado = mark_and_append(
         origen_df=df_afip,
         destino_xlsx_path=destino_path,
         destino_sheet=destino_sheet,
         columns_cfg=columns_cfg,
         out_path=str(destino_validado_path),
+        mapping=mapping,
     )
 
     # 5) Origen validado
@@ -101,15 +110,17 @@ def run_validation(
         origen_path=origen_path,
         sheet=origen_sheet,
         mapping=mapping,
-        destino_df=df_tango,
+        destino_df=df_odoo,
         tolerances=tolerances,
         out_path=str(origen_validado_path),
     )
 
     return {
-        "destino_validado": str(destino_validado_path),
+        "destino_validado": destino_guardado,
         "origen_validado":  str(origen_validado_path),
         "faltantes":        int(faltantes),
+        "coincidencias":    sum(message.startswith("✅") for message in msgs),
+        "diferencias":      sum(message.startswith("❌") for message in msgs),
         "mensajes":         msgs,
     }
 
@@ -134,9 +145,9 @@ def main():
     print(f"✅ Archivo de salida (destino): {result['destino_validado']}")
     print(f"✅ Archivo de salida (origen) : {result['origen_validado']}")
     if result["faltantes"]:
-        print(f"⚠️ Hay {result['faltantes']} factura(s) de AFIP sin coincidencia en Tango.")
+        print(f"⚠️ Hay {result['faltantes']} comprobante(s) de ARCA sin coincidencia en Odoo.")
     else:
-        print("✅ Todas las facturas de AFIP existen al menos una vez en Tango.")
+        print("✅ Todos los comprobantes de ARCA existen al menos una vez en Odoo.")
 
 
 if __name__ == "__main__":

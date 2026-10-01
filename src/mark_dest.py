@@ -1,64 +1,66 @@
-from openpyxl.styles import PatternFill, Font
-from openpyxl import load_workbook
+from datetime import datetime
 from pathlib import Path
+
 import pandas as pd
-import numpy as np
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import column_index_from_string
 
-from src.transform import _normalize_cuit, _normalize_name, _to_number_locale
+from src.transform import (
+    _as_list,
+    _invoice_letter,
+    _normalize_cuit,
+    _normalize_ncomp,
+    _to_number_locale,
+)
 
-YELLOW = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")  # diferencias
 
-def _coerce_for_compare(x, kind):
-    if kind == "number":
-        v = _to_number_locale(x)
-        return np.nan if v is pd.NA else float(v)
-    if kind == "date":
-        try:
-            return pd.to_datetime(x).date()
-        except Exception:
-            return np.nan
-    # string
-    s = "" if x is pd.NA else str(x)
-    return s.strip().upper()
+YELLOW = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
 
-def _compare_with_tolerance(a, b, kind, tol):
-    a = _coerce_for_compare(a, kind)
-    b = _coerce_for_compare(b, kind)
-    if kind == "number":
-        if (isinstance(a, float) and np.isnan(a)) and (isinstance(b, float) and np.isnan(b)):
-            return True
-        if isinstance(a, float) and isinstance(b, float):
-            return abs(a - b) <= tol
-        return False
-    else:
-        a = "" if (isinstance(a, float) and np.isnan(a)) else a
-        b = "" if (isinstance(b, float) and np.isnan(b)) else b
-        return a == b
 
-def _build_ws_key_index(ws, colmap):
-    """
-    Recorre la hoja destino para construir un índice:
-    key = (N_COMP_normalizado, CUIT_normalizado) -> lista de rownums
-    colmap: dict nombre_col -> indice_columna (1-based)
-    """
-    key_to_rows = {}
-    for r in range(2, ws.max_row + 1):
-        ncomp_cell = ws.cell(row=r, column=colmap["N_COMP"]).value
-        cuit_cell  = ws.cell(row=r, column=colmap["IDENTIFTRI"]).value
-        ncomp = str(ncomp_cell).strip().upper() if ncomp_cell is not None else ""
-        cuit_norm = _normalize_cuit(cuit_cell)
-        cuit = "" if pd.isna(cuit_norm) else str(cuit_norm)   # ← evita "or ''" con pd.NA
-        key = (ncomp, cuit)
-        key_to_rows.setdefault(key, []).append(r)
-    return key_to_rows
+def _is_number(value):
+    return isinstance(value, (int, float)) and not pd.isna(value)
 
-def _ensure_headers(ws, needed):
-    """Devuelve un dict nombre_col -> idx, error si falta alguna columna necesaria."""
-    header = {ws.cell(row=1, column=j).value: j for j in range(1, ws.max_column + 1)}
-    missing = [c for c in needed if c not in header]
-    if missing:
-        raise KeyError(f"En la hoja '{ws.title}' faltan columnas: {missing}")
-    return header
+
+def _column_indexes(worksheet, spec, header_row, *, optional=False):
+    header = {
+        str(worksheet.cell(header_row, column).value).strip(): column
+        for column in range(1, worksheet.max_column + 1)
+        if worksheet.cell(header_row, column).value is not None
+    }
+    indexes = []
+    for key in _as_list(spec):
+        text = str(key).strip()
+        if text in header:
+            indexes.append(header[text])
+        elif len(text) <= 3 and text.isalpha():
+            indexes.append(column_index_from_string(text.upper()))
+        elif not optional:
+            raise KeyError(f"En la hoja '{worksheet.title}' falta la columna '{text}'.")
+    return indexes
+
+
+def _aggregate_cells(worksheet, rows, columns):
+    values = []
+    for row in rows:
+        for column in columns:
+            value = _to_number_locale(worksheet.cell(row=row, column=column).value)
+            if _is_number(value):
+                values.append(float(value))
+    return sum(values) if values else pd.NA
+
+
+def _mark_cell(cell):
+    cell.fill = YELLOW
+    cell.font = Font(
+        name=cell.font.name,
+        size=cell.font.sz,
+        bold=True,
+        italic=cell.font.italic,
+        underline="single",
+        color=cell.font.color,
+    )
+
 
 def mark_and_append(
     origen_df: pd.DataFrame,
@@ -66,91 +68,79 @@ def mark_and_append(
     destino_sheet: str,
     columns_cfg: list,
     out_path: str,
+    mapping: dict,
 ):
-    """
-    - Abre el Excel de destino desde disco (sin copiar con shutil) y lo guarda como un archivo nuevo.
-    - Marca en amarillo las celdas de Tango que no coinciden contra AFIP.
-    - NO inserta filas nuevas; solo devuelve cuántas faltaron (missing_count).
-    """
-    # 1) Abrimos el workbook de destino original
+    """Marca en amarillo los importes de Odoo que difieren de ARCA."""
     try:
-        wb = load_workbook(destino_xlsx_path)
-    except PermissionError:
+        workbook = load_workbook(destino_xlsx_path)
+    except PermissionError as error:
         raise PermissionError(
             f"No se pudo abrir '{destino_xlsx_path}'. Cerrá el archivo si está abierto en Excel."
-        )
+        ) from error
 
-    out_file = Path(out_path)
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-
-    def save_wb_safely(workbook, path: Path):
-        try:
-            workbook.save(path)
-            return path
-        except PermissionError:
-            from datetime import datetime
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            alt = path.with_name(f"{path.stem}_{ts}{path.suffix}")
-            workbook.save(alt)
-            return alt
-
-    # 2) Seleccionamos la hoja del workbook cargado
-    if destino_sheet not in wb.sheetnames:
+    if destino_sheet not in workbook.sheetnames:
         raise ValueError(f"No existe la hoja '{destino_sheet}' en {destino_xlsx_path}")
-    ws = wb[destino_sheet]
+    worksheet = workbook[destino_sheet]
+    omap = mapping.get("odoo") or mapping.get("tango")
+    header_row = int(omap.get("header_row", 3))
 
-    # 3) Chequear encabezados necesarios
-    needed = set(["N_COMP", "IDENTIFTRI"]) | {c["name"] for c in columns_cfg}
-    header = _ensure_headers(ws, needed)
+    ncomp_column = _column_indexes(worksheet, omap["n_comp_column"], header_row)[0]
+    cuit_column = _column_indexes(worksheet, omap.get("cuit", "CUIT"), header_row)[0]
+    amount_mapping = omap.get("importes", {})
+    field_specs = {
+        "IMP_EXENTO": amount_mapping.get("exento"),
+        "IMP_NETO": amount_mapping.get("neto"),
+        "IMP_IVA": amount_mapping.get("iva"),
+        "IMP_TOTAL": amount_mapping.get("total"),
+    }
+    field_columns = {
+        field: _column_indexes(worksheet, spec, header_row, optional=True)
+        for field, spec in field_specs.items()
+    }
 
-    # 4) Índice por clave en la hoja: (N_COMP, IDENTIFTRI) -> filas
-    key_to_rows = _build_ws_key_index(ws, header)
+    key_to_rows = {}
+    for row_number in range(header_row + 1, worksheet.max_row + 1):
+        ncomp = _normalize_ncomp(worksheet.cell(row_number, ncomp_column).value)
+        cuit = _normalize_cuit(worksheet.cell(row_number, cuit_column).value)
+        cuit = "" if pd.isna(cuit) else str(cuit)
+        if ncomp:
+            key_to_rows.setdefault((ncomp, cuit), []).append(row_number)
 
-    # 5) Recorremos AFIP y validamos
-    missing_afip_rows = []
+    tolerance_by_field = {
+        column["name"]: float(column.get("tolerance", 0.0)) for column in columns_cfg
+    }
+    missing_count = 0
+    for _, source_row in origen_df.iterrows():
+        ncomp = _normalize_ncomp(source_row["N_COMP"])
+        cuit = _normalize_cuit(source_row["IDENTIFTRI"])
+        rows = key_to_rows.get((ncomp, "" if pd.isna(cuit) else str(cuit)), [])
+        if not rows:
+            missing_count += 1
+            continue
 
-    for _, row in origen_df.iterrows():
-        ncomp = str(row["N_COMP"]).strip().upper()
-        cuit_norm = _normalize_cuit(row["IDENTIFTRI"])
-        cuit = "" if pd.isna(cuit_norm) else str(cuit_norm)
-        key = (ncomp, cuit)
+        fields = ["IMP_TOTAL"] if _invoice_letter(ncomp) in ("B", "C") else list(field_specs)
+        tc = _to_number_locale(source_row.get("TC", 1.0))
+        tc = float(tc) if _is_number(tc) else 1.0
+        for field in fields:
+            target = _aggregate_cells(worksheet, rows, field_columns[field])
+            source = _to_number_locale(source_row[field])
+            source = source * tc if _is_number(source) else source
+            matches = (pd.isna(source) and pd.isna(target)) or (
+                _is_number(source)
+                and _is_number(target)
+                and abs(source - target) <= tolerance_by_field.get(field, 0.0) + 1e-9
+            )
+            if not matches:
+                for row_number in rows:
+                    for column_number in field_columns[field]:
+                        _mark_cell(worksheet.cell(row=row_number, column=column_number))
 
-        if key in key_to_rows and len(key_to_rows[key]) > 0:
-            r = key_to_rows[key][0]
-            letter = ncomp[0] if ncomp else ""
-            if letter == "C":
-                cols_to_check = [c for c in columns_cfg if c["name"] == "IMP_TOTAL"]
-            else:
-                cols_to_check = columns_cfg
-            tc_raw = row.get("TC", 1.0)
-            tc = _to_number_locale(tc_raw)
-            if not isinstance(tc, float) or np.isnan(tc):
-                tc = 1.0
-            for colinfo in cols_to_check:
-                name = colinfo["name"]
-                kind = colinfo.get("type", "string")
-                tol  = float(colinfo.get("tolerance", 0.0))
-                ws_val = ws.cell(row=r, column=header[name]).value
-                if kind == "number":
-                    a_num = _to_number_locale(row[name])
-                    a_adj = (a_num * tc) if (isinstance(a_num, float) and not np.isnan(a_num)) else a_num
-                    ok = _compare_with_tolerance(a_adj, ws_val, kind, tol)
-                else:
-                    ok = _compare_with_tolerance(row[name], ws_val, kind, tol)
-
-                if not ok:
-                    ws.cell(row=r, column=header[name]).fill = YELLOW
-                    current_font = ws.cell(row=r, column=header[name]).font
-                    ws.cell(row=r, column=header[name]).font = Font(
-                        name=getattr(current_font, "name", None),
-                        size=getattr(current_font, "sz", None),
-                        bold=True,
-                        underline="single",
-                    )
-        else:
-            missing_afip_rows.append(row) 
-
-    # 6) Guardar de forma segura
-    missing_count = len(missing_afip_rows)
-    save_wb_safely(wb, out_file)
-    return missing_count
+    output = Path(out_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        workbook.save(output)
+    except PermissionError:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output = output.with_name(f"{output.stem}_{stamp}{output.suffix}")
+        workbook.save(output)
+    return missing_count, str(output)

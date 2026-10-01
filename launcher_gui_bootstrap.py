@@ -1,12 +1,13 @@
 import tkinter as tk
 import traceback
 import threading
-from tkinter import filedialog, messagebox, END
+from queue import Empty, Queue
+from tkinter import filedialog, messagebox
 from pathlib import Path
 
 # Usamos ttkbootstrap para una interfaz más moderna
 import ttkbootstrap as ttk
-from ttkbootstrap.constants import *
+from ttkbootstrap.constants import BOTH, BOTTOM, LEFT, X
 
 from src.main import run_validation # Mantenemos tu lógica de validación intacta
 
@@ -29,6 +30,7 @@ class App(ttk.Window):
         self.origen_sheet = tk.StringVar()
         self.destino_sheet = tk.StringVar()
         self.status_text = tk.StringVar(value="Listo para empezar. Por favor, selecciona los archivos.")
+        self.result_queue = Queue()
 
         # --- Crear la interfaz de usuario ---
         self.create_widgets()
@@ -43,8 +45,8 @@ class App(ttk.Window):
         files_frame.pack(fill=X, expand=True)
         files_frame.columnconfigure(1, weight=1) # Permite que el Entry se expanda
 
-        # Origen (AFIP)
-        ttk.Label(files_frame, text="Origen (AFIP):").grid(row=0, column=0, sticky="w", padx=5, pady=(0, 5))
+        # Origen (ARCA)
+        ttk.Label(files_frame, text="Origen (ARCA):").grid(row=0, column=0, sticky="w", padx=5, pady=(0, 5))
         origen_entry = ttk.Entry(files_frame, textvariable=self.origen_name, state="readonly")
         origen_entry.grid(row=0, column=1, sticky="we", padx=5, pady=(0, 5))
         ttk.Button(
@@ -54,8 +56,8 @@ class App(ttk.Window):
             bootstyle="info-outline"
         ).grid(row=0, column=2, padx=5, pady=(0, 5))
 
-        # Destino (Tango)
-        ttk.Label(files_frame, text="Destino (Tango):").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        # Destino (Odoo)
+        ttk.Label(files_frame, text="Destino (Odoo):").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         destino_entry = ttk.Entry(files_frame, textvariable=self.destino_name, state="readonly")
         destino_entry.grid(row=1, column=1, sticky="we", padx=5, pady=5)
         ttk.Button(files_frame, text="Elegir...", command=lambda: self._pick_file('destino'), bootstyle="info-outline").grid(row=1, column=2, padx=5, pady=5)
@@ -96,7 +98,7 @@ class App(ttk.Window):
 
     def _pick_file(self, kind):
         file_path = filedialog.askopenfilename(
-            title="Elegir Excel de Origen (AFIP)" if kind == 'origen' else "Elegir Excel de Destino (Tango)",
+            title="Elegir Excel de Origen (ARCA)" if kind == 'origen' else "Elegir Excel de Destino (Odoo)",
             filetypes=[("Archivos de Excel", "*.xlsx"), ("Todos los archivos", "*.*")]
         )
         if file_path:
@@ -114,7 +116,7 @@ class App(ttk.Window):
         dir_path = filedialog.askdirectory(title="Elegir carpeta de salida")
         if dir_path:
             self.output_dir.set(dir_path)
-            self.status_text.set(f"Carpeta de salida actualizada.")
+            self.status_text.set("Carpeta de salida actualizada.")
 
     def start_validation_thread(self):
         """Inicia la validación en un hilo separado para no bloquear la GUI."""
@@ -122,32 +124,46 @@ class App(ttk.Window):
             messagebox.showwarning("Faltan archivos", "Por favor, selecciona los archivos de Origen y Destino.")
             return
 
+        params = {
+            "origen_path": self.origen_path.get(),
+            "destino_path": self.destino_path.get(),
+            "origen_sheet": self.origen_sheet.get().strip() or None,
+            "destino_sheet": self.destino_sheet.get().strip() or None,
+            "output_dir": self.output_dir.get(),
+        }
+
         # Deshabilitar botón y empezar la animación de progreso
         self.validate_button.config(state="disabled", text="Validando...")
         self.progress.start()
         self.status_text.set("Procesando archivos, por favor espera...")
 
         # Ejecutar la lógica pesada en otro hilo
-        thread = threading.Thread(target=self._run_validation_logic)
+        thread = threading.Thread(target=self._run_validation_logic, args=(params,))
         thread.daemon = True
         thread.start()
+        self.after(100, self._poll_validation_result)
 
-    def _run_validation_logic(self):
+    def _run_validation_logic(self, params):
         """Contiene la lógica de validación que se ejecutará en el hilo."""
         try:
-            Path(self.output_dir.get()).mkdir(parents=True, exist_ok=True)
-            result = run_validation(
-                origen_path=self.origen_path.get(),
-                destino_path=self.destino_path.get(),
-                origen_sheet=self.origen_sheet.get().strip() or None,
-                destino_sheet=self.destino_sheet.get().strip() or None,
-                output_dir=self.output_dir.get(),
-            )
-            # Programar la actualización de la GUI en el hilo principal
-            self.after(0, self._on_validation_complete, result)
+            Path(params["output_dir"]).mkdir(parents=True, exist_ok=True)
+            result = run_validation(**params)
+            self.result_queue.put(("ok", result))
         except Exception as e:
             traceback.print_exc()
-            self.after(0, self._on_validation_error, e)
+            self.result_queue.put(("error", e))
+
+    def _poll_validation_result(self):
+        """Entrega el resultado al hilo de Tk, sin acceder a Tk desde el worker."""
+        try:
+            status, payload = self.result_queue.get_nowait()
+        except Empty:
+            self.after(100, self._poll_validation_result)
+            return
+        if status == "ok":
+            self._on_validation_complete(payload)
+        else:
+            self._on_validation_error(payload)
 
     def _on_validation_complete(self, result):
         """Se ejecuta en el hilo principal cuando la validación es exitosa."""
@@ -155,7 +171,9 @@ class App(ttk.Window):
         resumen = (
             f"✔ Destino validado: {result['destino_validado']}\n"
             f"✔ Origen validado: {result['origen_validado']}\n"
-            + (f"⚠ Sin coincidencia (AFIP→Tango): {result['faltantes']}\n" if result['faltantes'] else "✔ Todas las facturas existen en Tango.\n")
+            f"\n✔ Coinciden: {result['coincidencias']}\n"
+            f"✖ Con diferencias: {result['diferencias']}\n"
+            + (f"⚠ No encontrados en Odoo: {result['faltantes']}\n" if result['faltantes'] else "✔ Todos los comprobantes existen en Odoo.\n")
         )
         self.status_text.set("¡Validación completada con éxito!")
         messagebox.showinfo("Proceso Terminado", resumen)
@@ -172,7 +190,7 @@ class App(ttk.Window):
         self.validate_button.config(state="normal", text="🚀 Validar Facturas")
 
 def main():
-    app = App(title="Validador de Facturas v2.0", size="600x500")
+    app = App(title="Validador de Facturas ARCA ↔ Odoo v3.0", size="600x500")
     app.mainloop()
 
 if __name__ == "__main__":

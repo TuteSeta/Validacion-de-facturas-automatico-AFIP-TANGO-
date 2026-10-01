@@ -1,35 +1,53 @@
-# Configuración inicial
-# Hoja a usar en cada libro (puede ser nombre o índice)
+# Exportaciones estándar de ARCA "Mis Comprobantes Recibidos" y
+# Odoo "Libro de IVA argentino".
+# Los números de fila son los que se ven en Excel (comienzan en 1).
 origen_sheet: "Sheet1"
-destino_sheet: "Hoja1"
+destino_sheet: "Libro de IVA argentino"
 
 mapping:
   afip:
+    header_row: 2
     n_comp_mode: "build"
-    tipo: "B"
-    pv:   "C"
-    num:  "D"
-    build_pattern: "{letter}{pv:05d}{num:08d}"
-    cuit:   "G"   
-    exchange_rate: "I"
+    tipo: "Tipo"
+    pv: "Punto de Venta"
+    num: "Número Desde"
+    build_pattern: "{doc_type}-{letter}{pv:05d}{num:08d}"
+    cuit: "Nro. Doc. Emisor"
+    exchange_rate: "Tipo Cambio"
     importes:
-      neto:   "K"
-      exento: "L"
-      iva:    "N"
-      total:  "O"
+      exento:
+        - "Neto No Gravado"
+        - "Op. Exentas"
+        - "Otros Tributos"
+      neto: "Neto Gravado Total"
+      iva: "Total IVA"
+      total: "Imp. Total"
 
-  tango:
+  odoo:
+    header_row: 3
     n_comp_mode: "column"
-    n_comp_column: "N_COMP"
-    cuit:   "IDENTIFTRI"
-    nombre: "NOM_PROVE"
+    # En el reporte de Odoo esta columna no tiene encabezado.
+    n_comp_column: "A"
+    cuit: "CUIT"
+    nombre: "Nombre"
     importes:
-      exento: "IMP_EXENTO"
-      neto:   "IMP_NETO"
-      iva:    "IMP_IVA"
-      total:  "IMP_TOTAL"
+      # Importes que no forman parte del neto gravado ni del IVA discriminado.
+      exento:
+        - "No gravado"
+        - "Perc. IVA"
+        - "Perc. IIBB"
+        - "Gcia. perc."
+        - "Municipales"
+        - "Otros impuestos"
+      neto: "Gravado"
+      iva:
+        - "IVA 2,5%"
+        - "IVA 5%"
+        - "IVA 10,5%"
+        - "IVA 21%"
+        - "IVA 27%"
+      total: "Total"
 
-# Solo importes 
 columns:
   - name: "IMP_EXENTO"
     type: "number"
@@ -43,6 +61,5 @@ columns:
   - name: "IMP_TOTAL"
     type: "number"
     tolerance: 0.01
-    
-# Formato de salida
-output_file: "outputs/destino_validado.xlsx"
+
+output_file: "outputs/odoo_validado.xlsx"

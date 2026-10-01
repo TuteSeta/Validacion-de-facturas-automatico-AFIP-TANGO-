@@ -1,78 +1,100 @@
-# Validador de Facturas (AFIP ⇄ Sistema interno)
+# Validador de facturas ARCA ↔ Odoo
 
-Herramienta para **comparar y validar** facturas entre dos fuentes (por ejemplo AFIP y Tango/ERP), generar un **reporte de diferencias** y **marcar** en el archivo de destino qué comprobantes faltan o no coinciden.
+Aplicación de escritorio para comparar la exportación **Mis Comprobantes Recibidos**
+de ARCA con el reporte **Libro de IVA argentino** de Odoo.
 
-Pensado para **usuarios no técnicos**: puede utilizarse con **interfaz gráfica (EXE)** o en **modo desarrollador** con Python.
+## Qué valida
 
----
+- Identifica cada comprobante por tipo, letra, punto de venta, número y CUIT.
+- Soporta facturas, notas de crédito y notas de débito A, B y C.
+- Convierte los importes de ARCA a pesos usando el tipo de cambio informado.
+- Trata las notas de crédito de ARCA con el signo contable usado por Odoo.
+- Para comprobantes B y C compara el total, ya que ARCA no siempre discrimina sus
+  componentes de la misma forma que Odoo.
+- Para comprobantes A compara neto gravado, IVA, otros conceptos y total.
 
-## 🧰 Características
-- Procesa en lote dos archivos Excel (origen y destino).
-- Mapea columnas mediante `config.yaml` (sin tocar el código).
-- Genera mensajes de validación y marcas en los archivos Excel.
-- Mantiene el formato original de los documentos.
-- Interfaz empaquetada en `.exe` para uso directo sin consola.
+El mapeo de hojas, filas de encabezado y columnas está en `config.yaml` para poder
+adaptarlo si cambia una exportación.
 
----
+## Archivos esperados
 
----
+1. Origen ARCA: Excel de **Mis Comprobantes Recibidos**.
+2. Destino Odoo: Excel del **Libro de IVA argentino**.
 
-## 🖱️ Uso del ejecutable (.exe)
-1. Entrá en la carpeta `dist/`.
-2. Abrí `ValidadorFacturas.exe` (doble clic).
-3. En la interfaz:
-   - Seleccioná el archivo **de AFIP** en el campo **origen**.
-   - Seleccioná el archivo **de TANGO** en el campo **destino**.
-   - Elegí una **carpeta de salida** donde se guardarán los resultados.
-4. Presioná **Validar**.
-5. En la carpeta de salida se generarán los siguientes archivos:
-   - `origen_validado.xlsx` → versión de AFIP con colores sobre lo que esta, no esta o esta diferente.
-   - `destino_marcado.xlsx` → archivo TANGO con marcas y comentarios.
+Los formatos de referencia para esta versión son:
 
-✅ **No requiere instalación** ni entorno Python.
+- `Mis Comprobantes Recibidos - CUIT 30719485991 (1).xlsx`
+- `libro_de_iva_argentino (2).xlsx`
 
----
+## Uso con interfaz gráfica
 
-## 💻 Uso en modo desarrollador
-1. Crear y activar entorno virtual:
-   ```bash
-   python -m venv .venv
-   .venv\Scripts\activate    # En Windows
-   # source .venv/bin/activate  # En Linux/Mac
-   ```
+```bash
+python -m venv .venv
+```
 
-2. Instalar dependencias:
-   ```bash
-   pip install -r requirements.txt
-   ```
+En Windows:
 
-3. Ejecutar la interfaz gráfica:
-   ```bash
-   python src/launcher_gui_bootstrap.py
-   ```
+```powershell
+.venv\Scripts\activate
+pip install -r requirements.txt
+python launcher_gui_bootstrap.py
+```
 
-4. O ejecutar desde la consola (modo CLI):
-   ```bash
-   python src/main.py
-   ```
+En Linux/macOS:
 
----
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+python launcher_gui_bootstrap.py
+```
 
-## 🧾 Archivos generados
-- `data/salida/origen_validado.xlsx`
-- `data/salida/destino_marcado.xlsx`
+En la ventana:
 
----
+1. Seleccioná el archivo de ARCA.
+2. Seleccioná el archivo de Odoo.
+3. Elegí la carpeta de salida.
+4. Presioná **Validar Facturas**.
 
-## 🧯 Errores comunes
-- **"Archivo en uso"** → Cerrá los Excel abiertos antes de correr.
-- **"Hoja o columna no encontrada"** → Revisá nombres exactos en `config.yaml`.
-- **"No se encuentran archivos"** → Verificá que estén en la carpeta correcta.
+Si se dejan vacíos los nombres de hoja, se usan `Sheet1` para ARCA y
+`Libro de IVA argentino` para Odoo.
 
----
+## Resultados
 
+- `origen_validado.xlsx`: copia tabular de ARCA con cada fila en verde
+  (coincide), rojo (difiere) o amarillo (no existe en Odoo).
+- `odoo_validado.xlsx`: copia del reporte original de Odoo; los importes que
+  difieren quedan resaltados en amarillo, sin alterar el archivo original.
 
----
+## Desarrollo y prueba por consola
 
-## 🧩 Licencia
-Proyecto de uso libre para fines administrativos y educativos.
+La función reutilizable es `src.main.run_validation`. También se puede ejecutar:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+El ejecutable histórico de `dist/` corresponde a la versión Tango hasta que se haga
+un build nuevo en Windows. Para generarlo, abrí una terminal en la raíz del proyecto
+y ejecutá:
+
+```bat
+build_windows.bat
+```
+
+El script crea un entorno limpio, instala las versiones fijadas, ejecuta las pruebas
+y genera `dist\ValidadorFacturas.exe` junto con `dist\config.yaml`. PyInstaller no es
+un compilador cruzado: el EXE de Windows debe construirse en Windows.
+
+La configuración externa colocada al lado del EXE tiene prioridad sobre la copia
+incluida dentro del ejecutable, por lo que futuros ajustes de columnas no siempre
+requieren recompilar.
+
+El análisis técnico vigente está en `ANALISIS_CODIGO.md`.
+
+## Errores frecuentes
+
+- **Archivo en uso**: cerrá el Excel antes de validar.
+- **Hoja o columna no encontrada**: comprobá que los archivos correspondan a las
+  exportaciones indicadas o actualizá `config.yaml`.
+- **Comprobante omitido**: está en ARCA pero todavía no se encontró en Odoo con el
+  mismo tipo, número y CUIT.

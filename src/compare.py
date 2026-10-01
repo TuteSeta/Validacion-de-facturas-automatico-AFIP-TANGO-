@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List
 
+from src.transform import _invoice_letter
+
 def _to_number_locale(x):
     if pd.isna(x) or x == "":
         return np.nan
@@ -79,15 +81,15 @@ def compare_and_messages(
         ncomp = str(row.get("N_COMP", "")).strip().upper()
         if row.get("_merge") == "left_only":
             cuit = _fmt_cuit_hyphen(row.get("IDENTIFTRI", ""))
-            messages.append(f"⚠️ Factura {ncomp} del proveedor {cuit} no se encuentra en destino. Se omite.")
+            messages.append(f"⚠️ Comprobante {ncomp} del proveedor {cuit} no se encuentra en Odoo. Se omite.")
             continue
 
-        # Para Factura C, solo TOTAL; para el resto, todas
-        letter = ncomp[0] if ncomp else ""
-        cols_to_check = ("IMP_TOTAL",) if letter == "C" else ("IMP_EXENTO", "IMP_NETO", "IMP_IVA", "IMP_TOTAL")
+        # En B y C ARCA no discrimina consistentemente neto/IVA: se valida TOTAL.
+        letter = _invoice_letter(ncomp)
+        cols_to_check = ("IMP_TOTAL",) if letter in ("B", "C") else ("IMP_EXENTO", "IMP_NETO", "IMP_IVA", "IMP_TOTAL")
 
         # Tipo de cambio del ORIGEN (si no viene, 1.0)
-        tc_raw = row.get("TC_origen", 1.0)
+        tc_raw = row.get("TC_origen", row.get("TC", 1.0))
         tc = _to_number_locale(tc_raw)
         if not isinstance(tc, float) or np.isnan(tc):
             tc = 1.0
@@ -105,20 +107,22 @@ def compare_and_messages(
             if (isinstance(a_adj, float) and np.isnan(a_adj)) and (isinstance(bv, float) and np.isnan(bv)):
                 continue
 
-            is_ok = (isinstance(a_adj, float) and isinstance(bv, float) and (abs(a_adj - bv) <= tol))
+            is_ok = (
+                isinstance(a_adj, float)
+                and isinstance(bv, float)
+                and abs(a_adj - bv) <= tol + 1e-9
+            )
             if not is_ok:
                 ok_all = False
                 diffs.append((name, a_adj, bv))
 
         if ok_all:
-            messages.append(f"✅ Factura {ncomp} coincide entre origen y destino.")
+            messages.append(f"✅ Comprobante {ncomp} coincide entre ARCA y Odoo.")
         else:
             parts = [
                 f"diferencia en {name.replace('IMP_', '').title()}. Origen: {_fmt_money_es(a_adj)} - Destino: {_fmt_money_es(bv)}"
                 for name, a_adj, bv in diffs
             ]
-            messages.append(f"❌ Factura {ncomp}: " + "; ".join(parts))
+            messages.append(f"❌ Comprobante {ncomp}: " + "; ".join(parts))
 
     return messages
-
-
