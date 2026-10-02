@@ -39,24 +39,29 @@ def _column_indexes(worksheet, spec, header_row, *, optional=False):
     return indexes
 
 
-def write_odoo_validado(destino_path, sheet, mapping, reconciliation, out_path):
-    """Copia Odoo, agrega estados y resalta únicamente los importes diferentes."""
+def write_destino_validado(destino_path, sheet, mapping, reconciliation, out_path, target_key="odoo"):
+    """Copia el destino, agrega estados y resalta únicamente los importes diferentes."""
     workbook = load_workbook(destino_path)
     if sheet not in workbook.sheetnames:
         raise ValueError(f"No existe la hoja '{sheet}' en {destino_path}")
     worksheet = workbook[sheet]
-    omap = mapping.get("odoo") or mapping["tango"]
-    header_row = int(omap.get("header_row", 3))
+    if target_key == "odoo":
+        target_map = mapping.get("odoo") or mapping.get("tango")
+    else:
+        target_map = mapping.get(target_key)
+    if not target_map:
+        raise KeyError(f"Falta 'mapping.{target_key}' en config.yaml.")
+    header_row = int(target_map.get("header_row", 3))
     status_column = worksheet.max_column + 1
     detail_column = status_column + 1
     worksheet.cell(header_row, status_column, "Estado_Validación").font = Font(bold=True)
     worksheet.cell(header_row, detail_column, "Detalle_Validación").font = Font(bold=True)
 
     field_specs = {
-        "IMP_EXENTO": omap.get("importes", {}).get("exento"),
-        "IMP_NETO": omap.get("importes", {}).get("neto"),
-        "IMP_IVA": omap.get("importes", {}).get("iva"),
-        "IMP_TOTAL": omap.get("importes", {}).get("total"),
+        "IMP_EXENTO": target_map.get("importes", {}).get("exento"),
+        "IMP_NETO": target_map.get("importes", {}).get("neto"),
+        "IMP_IVA": target_map.get("importes", {}).get("iva"),
+        "IMP_TOTAL": target_map.get("importes", {}).get("total"),
     }
     field_columns = {
         field: _column_indexes(worksheet, spec, header_row, optional=True)
@@ -65,7 +70,7 @@ def write_odoo_validado(destino_path, sheet, mapping, reconciliation, out_path):
 
     row_results = {}
     for _, result in reconciliation.details.iterrows():
-        for row_number in result.get("FILAS_ODOO", ()) or ():
+        for row_number in result.get("FILAS_DESTINO", ()) or ():
             row_results[int(row_number)] = (
                 result["ESTADO"], result["DETALLE"], result["CAMPOS_DIFERENTES"]
             )
@@ -77,13 +82,16 @@ def write_odoo_validado(destino_path, sheet, mapping, reconciliation, out_path):
         for row_number in record["FILAS_EXCEL"]:
             row_results[int(row_number)] = (STATUS_OUT_OF_PERIOD, detail, "")
     if not reconciliation.issues.empty:
-        for _, issue in reconciliation.issues[reconciliation.issues["FUENTE"] == "ODOO"].iterrows():
+        source_name = reconciliation.target_name.upper()
+        for _, issue in reconciliation.issues[reconciliation.issues["FUENTE"] == source_name].iterrows():
             row_results[int(issue["FILA_EXCEL"])] = (STATUS_INVALID, issue["MOTIVO"], "")
 
     for row_number, (status, detail, different_fields) in row_results.items():
         worksheet.cell(row_number, status_column, status)
         worksheet.cell(row_number, detail_column, detail)
         fill = FILLS.get(status)
+        if status.startswith("Falta en "):
+            fill = FILLS[STATUS_MISSING_ARCA]
         if fill:
             worksheet.cell(row_number, status_column).fill = fill
             worksheet.cell(row_number, detail_column).fill = fill
@@ -95,3 +103,10 @@ def write_odoo_validado(destino_path, sheet, mapping, reconciliation, out_path):
                     worksheet.cell(row_number, column_number).font = Font(bold=True, underline="single")
 
     workbook.save(out_path)
+
+
+def write_odoo_validado(destino_path, sheet, mapping, reconciliation, out_path):
+    """Alias compatible con integraciones anteriores."""
+    return write_destino_validado(
+        destino_path, sheet, mapping, reconciliation, out_path, target_key="odoo"
+    )

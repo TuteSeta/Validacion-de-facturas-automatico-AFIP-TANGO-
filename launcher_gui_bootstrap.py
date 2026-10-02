@@ -19,16 +19,19 @@ class App(ttk.Window):
         super().__init__(themename="superhero") # Elige un tema, e.g., "superhero", "litera", "minty"
         self.title(title)
         self.geometry(size)
-        self.minsize(560, 480)
+        self.minsize(600, 570)
 
         # --- Variables de estado ---
         self.origen_path = tk.StringVar()
         self.destino_path = tk.StringVar()
+        self.comparison_mode = tk.StringVar(value="odoo")
+        self.destino_label = tk.StringVar(value="Destino (Odoo):")
+        self.destino_sheet_label = tk.StringVar(value="Nombre de la hoja (Odoo):")
         self.origen_name = tk.StringVar()
         self.destino_name = tk.StringVar()
         self.output_dir = tk.StringVar(value=str(Path.cwd() / "outputs"))
-        self.origen_sheet = tk.StringVar()
-        self.destino_sheet = tk.StringVar()
+        self.origen_sheet = tk.StringVar(value="Sheet1")
+        self.destino_sheet = tk.StringVar(value="Libro de IVA argentino")
         self.status_text = tk.StringVar(value="Listo para empezar. Por favor, selecciona los archivos.")
         self.result_queue = Queue()
 
@@ -39,6 +42,25 @@ class App(ttk.Window):
         """Crea y posiciona todos los widgets en la ventana."""
         main_frame = ttk.Frame(self, padding="20")
         main_frame.pack(fill=BOTH, expand=True)
+
+        mode_frame = ttk.LabelFrame(main_frame, text=" 🔄 Tipo de comparación ", padding="10")
+        mode_frame.pack(fill=X, expand=True, pady=(0, 15))
+        ttk.Radiobutton(
+            mode_frame,
+            text="ARCA ↔ Odoo",
+            variable=self.comparison_mode,
+            value="odoo",
+            command=self._on_mode_changed,
+            bootstyle="info-toolbutton",
+        ).pack(side=LEFT, fill=X, expand=True, padx=5)
+        ttk.Radiobutton(
+            mode_frame,
+            text="ARCA ↔ Finnegans",
+            variable=self.comparison_mode,
+            value="finnegans",
+            command=self._on_mode_changed,
+            bootstyle="info-toolbutton",
+        ).pack(side=LEFT, fill=X, expand=True, padx=5)
 
         # --- Sección de Archivos ---
         files_frame = ttk.LabelFrame(main_frame, text=" 📂 1. Selección de Archivos ", padding="15")
@@ -57,7 +79,7 @@ class App(ttk.Window):
         ).grid(row=0, column=2, padx=5, pady=(0, 5))
 
         # Destino (Odoo)
-        ttk.Label(files_frame, text="Destino (Odoo):").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(files_frame, textvariable=self.destino_label).grid(row=1, column=0, sticky="w", padx=5, pady=5)
         destino_entry = ttk.Entry(files_frame, textvariable=self.destino_name, state="readonly")
         destino_entry.grid(row=1, column=1, sticky="we", padx=5, pady=5)
         ttk.Button(files_frame, text="Elegir...", command=lambda: self._pick_file('destino'), bootstyle="info-outline").grid(row=1, column=2, padx=5, pady=5)
@@ -71,7 +93,7 @@ class App(ttk.Window):
         ttk.Label(options_frame, text="Nombre de la hoja (Origen):").grid(row=0, column=0, sticky="w", padx=5, pady=(0, 5))
         ttk.Entry(options_frame, textvariable=self.origen_sheet).grid(row=1, column=0, sticky="we", padx=5)
 
-        ttk.Label(options_frame, text="Nombre de la hoja (Destino):").grid(row=0, column=1, sticky="w", padx=5, pady=(0, 5))
+        ttk.Label(options_frame, textvariable=self.destino_sheet_label).grid(row=0, column=1, sticky="w", padx=5, pady=(0, 5))
         ttk.Entry(options_frame, textvariable=self.destino_sheet).grid(row=1, column=1, sticky="we", padx=5)
 
         # Carpeta de Salida
@@ -97,8 +119,9 @@ class App(ttk.Window):
 
 
     def _pick_file(self, kind):
+        target_name = "Odoo" if self.comparison_mode.get() == "odoo" else "Finnegans"
         file_path = filedialog.askopenfilename(
-            title="Elegir Excel de Origen (ARCA)" if kind == 'origen' else "Elegir Excel de Destino (Odoo)",
+            title="Elegir Excel de Origen (ARCA)" if kind == 'origen' else f"Elegir Excel de Destino ({target_name})",
             filetypes=[("Archivos de Excel", "*.xlsx"), ("Todos los archivos", "*.*")]
         )
         if file_path:
@@ -110,6 +133,17 @@ class App(ttk.Window):
                 self.destino_path.set(str(p))
                 self.destino_name.set(p.name)
             self.status_text.set(f"Archivo seleccionado: {p.name}")
+
+    def _on_mode_changed(self):
+        """Actualiza textos y valores predeterminados al alternar el destino."""
+        is_odoo = self.comparison_mode.get() == "odoo"
+        target_name = "Odoo" if is_odoo else "Finnegans"
+        self.destino_label.set(f"Destino ({target_name}):")
+        self.destino_sheet_label.set(f"Nombre de la hoja ({target_name}):")
+        self.destino_sheet.set("Libro de IVA argentino" if is_odoo else "hoja1")
+        self.destino_path.set("")
+        self.destino_name.set("")
+        self.status_text.set(f"Modo seleccionado: ARCA ↔ {target_name}.")
 
     def _pick_output_dir(self):
         """Manejador para seleccionar la carpeta de salida."""
@@ -130,6 +164,7 @@ class App(ttk.Window):
             "origen_sheet": self.origen_sheet.get().strip() or None,
             "destino_sheet": self.destino_sheet.get().strip() or None,
             "output_dir": self.output_dir.get(),
+            "comparison_mode": self.comparison_mode.get(),
         }
 
         # Deshabilitar botón y empezar la animación de progreso
@@ -168,15 +203,16 @@ class App(ttk.Window):
     def _on_validation_complete(self, result):
         """Se ejecuta en el hilo principal cuando la validación es exitosa."""
         self._reset_ui_state()
+        target_name = result["destino_nombre"]
         resumen = (
             f"✔ Resultados: {result['run_dir']}\n"
             f"✔ Reporte: {result['reporte_validacion']}\n"
             f"\n✔ Coinciden: {result['coincidencias']}\n"
             f"✖ Con diferencias: {result['diferencias']}\n"
-            f"⚠ Faltan en Odoo: {result['faltantes_en_odoo']}\n"
+            f"⚠ Faltan en {target_name}: {result['faltantes_en_destino']}\n"
             f"⚠ Faltan en ARCA: {result['faltantes_en_arca']}\n"
-            f"⚠ Inválidos: {result['invalidos_arca'] + result['invalidos_odoo']}\n"
-            f"ℹ Odoo fuera del período: {result['fuera_periodo_odoo']}\n"
+            f"⚠ Inválidos: {result['invalidos_arca'] + result['invalidos_destino']}\n"
+            f"ℹ {target_name} fuera del período: {result['fuera_periodo_destino']}\n"
         )
         self.status_text.set("¡Validación completada con éxito!")
         messagebox.showinfo("Proceso Terminado", resumen)
@@ -193,7 +229,7 @@ class App(ttk.Window):
         self.validate_button.config(state="normal", text="🚀 Validar Facturas")
 
 def main():
-    app = App(title="Validador de Facturas ARCA ↔ Odoo v4.0", size="600x500")
+    app = App(title="Validador de Facturas ARCA ↔ Odoo / Finnegans v5.0", size="650x600")
     app.mainloop()
 
 if __name__ == "__main__":

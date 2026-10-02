@@ -107,7 +107,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(list(self.output.glob("validacion_error_*.log"))), 1)
 
     def test_locked_output_is_reported_without_partial_run(self):
-        with patch("src.main.write_odoo_validado", side_effect=PermissionError("archivo abierto")):
+        with patch("src.main.write_destino_validado", side_effect=PermissionError("archivo abierto")):
             with self.assertRaises(RuntimeError):
                 run_validation(
                     str(self.arca), str(self.odoo), output_dir=str(self.output), config_path=str(self.config)

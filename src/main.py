@@ -9,13 +9,18 @@ from typing import Any, Dict, Optional
 import yaml
 
 from src.compare import messages_from_result, reconcile
-from src.mark_dest import write_odoo_validado
+from src.mark_dest import write_destino_validado
 from src.origen_validated import write_origen_validado
 from src.output_report import write_consolidated_report
-from src.transform import load_afip_result, load_odoo_result
+from src.transform import load_afip_result, load_finnegans_result, load_odoo_result
 
 
-APP_VERSION = "4.0"
+APP_VERSION = "5.0"
+
+COMPARISON_MODES = {
+    "odoo": {"name": "Odoo", "default_sheet_key": "destino_sheet"},
+    "finnegans": {"name": "Finnegans", "default_sheet_key": "finnegans_sheet"},
+}
 
 
 def _base_dir() -> Path:
@@ -59,11 +64,13 @@ def _available_run_dir(output_dir: Path, stamp: str) -> Path:
 
 def _success_log(reconciliation, source_paths):
     metrics = reconciliation.metrics
+    target_name = reconciliation.target_name
+    target_key = target_name.casefold()
     lines = [
-        f"Validador ARCA–Odoo v{APP_VERSION}",
+        f"Validador ARCA–{target_name} v{APP_VERSION}",
         f"Fecha de ejecución: {datetime.now():%d/%m/%Y %H:%M:%S}",
         f"ARCA: {source_paths['arca']}",
-        f"Odoo: {source_paths['odoo']}",
+        f"{target_name}: {source_paths[target_key]}",
         f"Período: {reconciliation.period_start:%d/%m/%Y}–{reconciliation.period_end:%d/%m/%Y}",
     ]
     lines.extend(f"{key}: {value}" for key, value in metrics.items())
@@ -77,10 +84,19 @@ def run_validation(
     destino_sheet: Optional[str] = None,
     output_dir: Optional[str] = None,
     config_path: Optional[str] = None,
+    comparison_mode: str = "odoo",
 ) -> Dict[str, Any]:
     cfg = _load_config(config_path)
+    comparison_mode = comparison_mode.strip().casefold()
+    if comparison_mode not in COMPARISON_MODES:
+        valid_modes = ", ".join(COMPARISON_MODES)
+        raise ValueError(f"Modo de comparación inválido: {comparison_mode}. Use: {valid_modes}.")
+    mode = COMPARISON_MODES[comparison_mode]
+    target_name = mode["name"]
+    target_key = target_name.casefold()
     origen_sheet = origen_sheet or cfg.get("origen_sheet", "Sheet1")
-    destino_sheet = destino_sheet or cfg.get("destino_sheet", "Libro de IVA argentino")
+    default_target_sheet = "Libro de IVA argentino" if comparison_mode == "odoo" else "hoja1"
+    destino_sheet = destino_sheet or cfg.get(mode["default_sheet_key"], default_target_sheet)
     mapping = cfg["mapping"]
     columns_cfg = cfg.get("columns", [])
     tolerances = {column["name"]: float(column.get("tolerance", 0.0)) for column in columns_cfg}
@@ -93,27 +109,37 @@ def run_validation(
 
     try:
         arca_result = load_afip_result(origen_path, origen_sheet, mapping)
-        odoo_result = load_odoo_result(destino_path, destino_sheet, mapping)
-        reconciliation = reconcile(arca_result, odoo_result, tolerances)
+        if comparison_mode == "odoo":
+            target_result = load_odoo_result(destino_path, destino_sheet, mapping)
+        else:
+            target_result = load_finnegans_result(destino_path, destino_sheet, mapping)
+        reconciliation = reconcile(
+            arca_result, target_result, tolerances, target_name=target_name
+        )
         messages = messages_from_result(reconciliation)
 
         arca_output = staging_dir / "origen_validado.xlsx"
-        odoo_output = staging_dir / "odoo_validado.xlsx"
+        target_output = staging_dir / f"{target_key}_validado.xlsx"
         report_output = staging_dir / "reporte_validacion.xlsx"
         log_output = staging_dir / "validacion.log"
         write_origen_validado(
             origen_path, origen_sheet, mapping, reconciliation, arca_output
         )
-        write_odoo_validado(
-            destino_path, destino_sheet, mapping, reconciliation, odoo_output
+        write_destino_validado(
+            destino_path,
+            destino_sheet,
+            mapping,
+            reconciliation,
+            target_output,
+            target_key=comparison_mode,
         )
         write_consolidated_report(
             report_output,
             reconciliation,
-            {"arca": Path(origen_path).name, "odoo": Path(destino_path).name},
+            {"arca": Path(origen_path).name, target_key: Path(destino_path).name},
         )
         log_output.write_text(
-            _success_log(reconciliation, {"arca": origen_path, "odoo": destino_path}),
+            _success_log(reconciliation, {"arca": origen_path, target_key: destino_path}),
             encoding="utf-8",
         )
 
@@ -121,11 +147,13 @@ def run_validation(
         metrics = reconciliation.metrics
         result = {
             "run_dir": str(final_dir),
-            "destino_validado": str(final_dir / odoo_output.name),
+            "destino_validado": str(final_dir / target_output.name),
             "origen_validado": str(final_dir / arca_output.name),
             "reporte_validacion": str(final_dir / report_output.name),
             "log": str(final_dir / log_output.name),
-            "faltantes": metrics["faltantes_en_odoo"],
+            "faltantes": metrics["faltantes_en_destino"],
+            "modo": comparison_mode,
+            "destino_nombre": target_name,
             **metrics,
             "periodo": {
                 "desde": reconciliation.period_start.date().isoformat(),
@@ -133,6 +161,7 @@ def run_validation(
             },
             "mensajes": messages,
         }
+        result[f"{target_key}_validado"] = result["destino_validado"]
         for message in messages:
             print(message)
         return result
@@ -140,7 +169,7 @@ def run_validation(
         shutil.rmtree(staging_dir, ignore_errors=True)
         error_log = output_root / f"validacion_error_{stamp}.log"
         error_log.write_text(
-            f"Validador ARCA–Odoo v{APP_VERSION}\n{traceback.format_exc()}",
+            f"Validador ARCA–{target_name} v{APP_VERSION}\n{traceback.format_exc()}",
             encoding="utf-8",
         )
         raise RuntimeError(

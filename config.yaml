@@ -3,6 +3,7 @@
 # Los números de fila son los que se ven en Excel (comienzan en 1).
 origen_sheet: "Sheet1"
 destino_sheet: "Libro de IVA argentino"
+finnegans_sheet: "hoja1"
 
 mapping:
   afip:
@@ -48,6 +49,18 @@ mapping:
         - "IVA 10,5%"
         - "IVA 21%"
         - "IVA 27%"
+      total: "Total"
+
+  finnegans:
+    header_row: 1
+    date: "Fecha"
+    document: "Documento"
+    n_comp_column: "Comprobante"
+    cuit: "Cuit"
+    importes:
+      exento: "Otros"
+      neto: "Imponible"
+      iva: "Impuesto"
       total: "Total"
 
 columns:

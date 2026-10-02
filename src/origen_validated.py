@@ -36,6 +36,8 @@ def write_origen_validado(origen_path, sheet, mapping, reconciliation, out_path)
         worksheet.cell(row_number, status_column, status)
         worksheet.cell(row_number, detail_column, detail)
         fill = FILLS.get(status)
+        if status.startswith("Falta en "):
+            fill = FILLS[STATUS_MISSING_ODOO]
         if fill:
             worksheet.cell(row_number, status_column).fill = fill
             worksheet.cell(row_number, detail_column).fill = fill

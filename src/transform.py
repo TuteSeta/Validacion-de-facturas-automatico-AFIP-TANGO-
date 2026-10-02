@@ -355,6 +355,118 @@ def load_odoo_result(path: str, sheet: str, mp: dict) -> LoadResult:
     return LoadResult(records_df.reset_index(drop=True), pd.DataFrame(issues) if issues else _empty_issues())
 
 
+def _finnegans_document_type(value) -> str:
+    text = "" if pd.isna(value) else str(value).strip().upper()
+    if text.startswith("NC"):
+        return "NC"
+    if text.startswith("ND"):
+        return "ND"
+    if text.startswith(("FC", "FCCONTADO")):
+        return "FA"
+    raise ValueError(f"tipo de documento Finnegans no reconocido: {value}")
+
+
+def load_finnegans_result(path: str, sheet: str, mp: dict) -> LoadResult:
+    fmap = mp.get("finnegans")
+    if not fmap:
+        raise KeyError("Falta 'mapping.finnegans' en config.yaml.")
+    header_index = _header_index(fmap, 1)
+    df = pd.read_excel(path, sheet_name=sheet, header=header_index)
+    c_date = _require_column(df, fmap.get("date", "Fecha"), "Finnegans")
+    c_document = _require_column(df, fmap.get("document", "Documento"), "Finnegans")
+    c_ncomp = _require_column(df, fmap.get("n_comp_column", "Comprobante"), "Finnegans")
+    c_cuit = _require_column(df, fmap.get("cuit", "Cuit"), "Finnegans")
+    amounts = fmap.get("importes", {})
+    amount_columns = {
+        "IMP_EXENTO": _require_column(df, amounts.get("exento", "Otros"), "Finnegans"),
+        "IMP_NETO": _require_column(df, amounts.get("neto", "Imponible"), "Finnegans"),
+        "IMP_IVA": _require_column(df, amounts.get("iva", "Impuesto"), "Finnegans"),
+        "IMP_TOTAL": _require_column(df, amounts.get("total", "Total"), "Finnegans"),
+    }
+    number_cfg = {
+        "decimal_separator": fmap.get("decimal_separator"),
+        "thousands_separator": fmap.get("thousands_separator"),
+    }
+
+    blocks, current = [], []
+    identity_columns = (c_date, c_document, c_ncomp, c_cuit)
+    for index, row in df.iterrows():
+        raw_ncomp = "" if pd.isna(row[c_ncomp]) else str(row[c_ncomp]).strip()
+        if raw_ncomp.casefold().startswith("total"):
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        starts_document = any(not pd.isna(row[column]) and str(row[column]).strip() for column in identity_columns)
+        if starts_document:
+            if current:
+                blocks.append(current)
+            current = [(index, row)]
+        elif current:
+            current.append((index, row))
+    if current:
+        blocks.append(current)
+
+    records, issues = [], []
+    for block in blocks:
+        index, first_row = block[0]
+        excel_rows = tuple(int(row_index) + header_index + 2 for row_index, _ in block)
+        ncomp, cuit = "", _valid_cuit(first_row[c_cuit])
+        try:
+            doc_type = _finnegans_document_type(first_row[c_document])
+            ncomp = _normalize_ncomp(f"{doc_type}-{first_row[c_ncomp]}")
+            if not ncomp:
+                raise ValueError(f"número de comprobante inválido: {first_row[c_ncomp]}")
+            if not cuit:
+                raise ValueError(f"CUIT inválido: {first_row[c_cuit]}")
+            date = pd.to_datetime(first_row[c_date], dayfirst=True, errors="coerce")
+            if pd.isna(date):
+                raise ValueError(f"fecha inválida: {first_row[c_date]}")
+
+            values = {}
+            for field in ("IMP_EXENTO", "IMP_NETO", "IMP_IVA"):
+                parsed = [_parse_number(row[amount_columns[field]], **number_cfg) for _, row in block]
+                if any(
+                    not pd.isna(row[amount_columns[field]])
+                    and row[amount_columns[field]] != ""
+                    and pd.isna(value)
+                    for (_, row), value in zip(block, parsed)
+                ):
+                    raise ValueError(f"importe inválido en '{amount_columns[field]}'")
+                present = [float(value) for value in parsed if not pd.isna(value)]
+                values[field] = sum(present) if present else pd.NA
+
+            total_raw = block[-1][1][amount_columns["IMP_TOTAL"]]
+            total = _parse_number(total_raw, **number_cfg)
+            if pd.isna(total):
+                raise ValueError("importe total vacío o inválido")
+            values["IMP_TOTAL"] = float(total)
+            records.append({
+                "FUENTE": "FINNEGANS",
+                "FILA_EXCEL": excel_rows[0],
+                "FILAS_EXCEL": excel_rows,
+                "FECHA": date.normalize(),
+                "MONEDA": "ARS",
+                "N_COMP": ncomp,
+                "IDENTIFTRI": cuit,
+                "TC": 1.0,
+                **values,
+            })
+        except (KeyError, ValueError) as error:
+            issues.append(_issue("FINNEGANS", excel_rows[0], str(error), ncomp, cuit or ""))
+
+    records_df = pd.DataFrame(records)
+    if not records_df.empty:
+        duplicate_mask = records_df.duplicated(["N_COMP", "IDENTIFTRI"], keep=False)
+        for _, duplicate in records_df[duplicate_mask].iterrows():
+            issues.append(_issue(
+                "FINNEGANS", duplicate["FILA_EXCEL"], "clave de comprobante duplicada",
+                duplicate["N_COMP"], duplicate["IDENTIFTRI"],
+            ))
+        records_df = records_df[~duplicate_mask].reset_index(drop=True)
+    return LoadResult(records_df, pd.DataFrame(issues) if issues else _empty_issues())
+
+
 def load_afip_with_map(path: str, sheet: str, mp: dict) -> pd.DataFrame:
     return load_afip_result(path, sheet, mp).records
 

@@ -14,18 +14,20 @@ def _excel_safe(frame):
 
 def write_consolidated_report(path, reconciliation, source_names):
     metrics = reconciliation.metrics
+    target_name = reconciliation.target_name
+    target_key = target_name.casefold()
     summary = pd.DataFrame([
         ("Archivo ARCA", source_names["arca"]),
-        ("Archivo Odoo", source_names["odoo"]),
+        (f"Archivo {target_name}", source_names[target_key]),
         ("Período desde", reconciliation.period_start.strftime("%d/%m/%Y")),
         ("Período hasta", reconciliation.period_end.strftime("%d/%m/%Y")),
         ("Coincidencias", metrics["coincidencias"]),
         ("Diferencias", metrics["diferencias"]),
-        ("Faltantes en Odoo", metrics["faltantes_en_odoo"]),
+        (f"Faltantes en {target_name}", metrics["faltantes_en_destino"]),
         ("Faltantes en ARCA", metrics["faltantes_en_arca"]),
         ("Inválidos ARCA", metrics["invalidos_arca"]),
-        ("Inválidos Odoo", metrics["invalidos_odoo"]),
-        ("Filas Odoo fuera del período", metrics["fuera_periodo_odoo"]),
+        (f"Inválidos {target_name}", metrics["invalidos_destino"]),
+        (f"Comprobantes {target_name} fuera del período", metrics["fuera_periodo_destino"]),
     ], columns=["Concepto", "Valor"])
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
@@ -37,7 +39,7 @@ def write_consolidated_report(path, reconciliation, source_names):
             writer, sheet_name="Incidencias", index=False
         )
         _excel_safe(reconciliation.out_of_period).to_excel(
-            writer, sheet_name="Odoo fuera de período", index=False
+            writer, sheet_name=f"{target_name} fuera de período", index=False
         )
 
     workbook = load_workbook(path)
