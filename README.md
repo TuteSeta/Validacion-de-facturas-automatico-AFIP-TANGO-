@@ -1,12 +1,13 @@
 # Validador de facturas ARCA ↔ Odoo
 
-Aplicación de escritorio para comparar la exportación **Mis Comprobantes Recibidos**
+Aplicación de escritorio para comparar la exportación **Comprobantes de Compras**
 de ARCA con el reporte **Libro de IVA argentino** de Odoo.
 
 ## Qué valida
 
 - Identifica cada comprobante por tipo, letra, punto de venta, número y CUIT.
-- Soporta facturas, notas de crédito y notas de débito A, B y C.
+- Soporta facturas, notas de crédito y notas de débito A, B y C, además de
+  los tipos Tique Factura A y Recibo C presentes en el reporte de referencia.
 - Convierte los importes de ARCA a pesos usando el tipo de cambio informado.
 - Trata las notas de crédito de ARCA con el signo contable usado por Odoo.
 - Para comprobantes B y C compara el total, ya que ARCA no siempre discrimina sus
@@ -21,12 +22,12 @@ adaptarlo si cambia una exportación.
 
 ## Archivos esperados
 
-1. Origen ARCA: Excel de **Mis Comprobantes Recibidos**.
+1. Origen ARCA: Excel de **Comprobantes de Compras**.
 2. Destino Odoo: Excel del **Libro de IVA argentino**.
 
 Los formatos de referencia para esta versión son:
 
-- `Mis Comprobantes Recibidos - CUIT 30719485991 (1).xlsx`
+- `Comprobantes de Compras - CUIT 30719485991.xlsx`
 - `libro_de_iva_argentino (2).xlsx`
 
 ## Uso con interfaz gráfica

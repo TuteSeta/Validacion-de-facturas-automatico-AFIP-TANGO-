@@ -24,6 +24,21 @@ class TransformTests(unittest.TestCase):
         self.assertEqual(_tipo_to_doc_letter("8 - Nota de Crédito B"), ("NC", "B"))
         self.assertEqual(_tipo_to_doc_letter("2 - Nota de Débito A"), ("ND", "A"))
 
+    def test_supports_purchase_report_ticket_and_receipt_types(self):
+        self.assertEqual(
+            _tipo_to_doc_letter("81 - Tique Factura A Controladores Fiscales", strict=True),
+            ("TF", "A"),
+        )
+        self.assertEqual(_tipo_to_doc_letter("15 - Recibo C", strict=True), ("RE", "C"))
+        self.assertEqual(
+            _normalize_ncomp("TF-A 00017-00014635"),
+            "TF-A00017-00014635",
+        )
+        self.assertEqual(
+            _normalize_ncomp("RE-C 00008-00000120"),
+            "RE-C00008-00000120",
+        )
+
     def test_builds_arca_number_from_numeric_parts(self):
         self.assertEqual(
             _build_ncomp_from_parts(

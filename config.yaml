@@ -1,4 +1,4 @@
-# Exportaciones estándar de ARCA "Mis Comprobantes Recibidos" y
+# Exportaciones estándar de ARCA "Comprobantes de Compras" y
 # Odoo "Libro de IVA argentino".
 # Los números de fila son los que se ven en Excel (comienzan en 1).
 origen_sheet: "Sheet1"
@@ -13,17 +13,16 @@ mapping:
     num: "Número Desde"
     build_pattern: "{doc_type}-{letter}{pv:05d}{num:08d}"
     date: "Fecha"
-    cuit: "Nro. Doc. Emisor"
+    cuit: "Nro. Doc. Vendedor"
     currency: "Moneda"
     exchange_rate: "Tipo Cambio"
     importes:
       exento:
-        - "Neto No Gravado"
-        - "Op. Exentas"
-        - "Otros Tributos"
-      neto: "Neto Gravado Total"
-      iva: "Total IVA"
-      total: "Imp. Total"
+        - "No Gravado"
+        - "Exento"
+      neto: "Neto Gravado"
+      iva: "IVA"
+      total: "Total"
 
   odoo:
     header_row: 3

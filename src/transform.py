@@ -92,6 +92,7 @@ _DOC_CODES = {
     1: ("FA", "A"), 6: ("FA", "B"), 11: ("FA", "C"),
     2: ("ND", "A"), 7: ("ND", "B"), 12: ("ND", "C"),
     3: ("NC", "A"), 8: ("NC", "B"), 13: ("NC", "C"),
+    15: ("RE", "C"), 81: ("TF", "A"),
     201: ("FA", "A"), 206: ("FA", "B"), 211: ("FA", "C"),
     202: ("ND", "A"), 207: ("ND", "B"), 212: ("ND", "C"),
     203: ("NC", "A"), 208: ("NC", "B"), 213: ("NC", "C"),
@@ -125,14 +126,14 @@ def _tipo_to_doc_letter(value, *, strict=False):
 
 def _normalize_ncomp(value):
     text = "" if pd.isna(value) else re.sub(r"\s+", "", str(value).strip().upper())
-    match = re.fullmatch(r"(FA|FC|NC|ND)?-?([ABC])-?(\d+)-(\d+)", text)
+    match = re.fullmatch(r"(FA|FC|NC|ND|RE|TF)?-?([ABC])-?(\d+)-(\d+)", text)
     if match:
         doc_type = "FA" if match.group(1) in (None, "FC") else match.group(1)
         pv, number = int(match.group(3)), int(match.group(4))
         if 1 <= pv <= 99999 and 1 <= number <= 99999999:
             return f"{doc_type}-{match.group(2)}{pv:05d}-{number:08d}"
         return ""
-    match = re.fullmatch(r"(FA|FC|NC|ND)?-?([ABC])(\d{4,5})(\d{8})", text)
+    match = re.fullmatch(r"(FA|FC|NC|ND|RE|TF)?-?([ABC])(\d{4,5})(\d{8})", text)
     if match:
         doc_type = "FA" if match.group(1) in (None, "FC") else match.group(1)
         pv, number = int(match.group(3)), int(match.group(4))
@@ -303,11 +304,14 @@ def load_odoo_result(path: str, sheet: str, mp: dict) -> LoadResult:
     records, issues = [], []
     for index, row in df.iterrows():
         excel_row = int(index) + header_index + 2
-        ncomp = _normalize_ncomp(row[c_ncomp])
+        raw_ncomp = row[c_ncomp]
+        if str(raw_ncomp).strip().casefold() in {"total", "totales"}:
+            continue
+        ncomp = _normalize_ncomp(raw_ncomp)
         cuit = _valid_cuit(row[c_cuit])
         try:
             if not ncomp:
-                raise ValueError(f"número de comprobante inválido: {row[c_ncomp]}")
+                raise ValueError(f"número de comprobante inválido: {raw_ncomp}")
             if not cuit:
                 raise ValueError(f"CUIT inválido: {row[c_cuit]}")
             date = pd.to_datetime(row[c_date], dayfirst=True, errors="coerce")

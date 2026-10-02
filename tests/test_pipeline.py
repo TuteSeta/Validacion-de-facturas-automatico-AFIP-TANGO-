@@ -73,6 +73,7 @@ class PipelineTests(unittest.TestCase):
         ws.append(["FA-A 00001-00000010", "31/07/2026", 30799999998, 0, 10, 2.1, 12.1])
         ws.append(["NC-A 00001-00000003", "03/08/2026", 30733333333, 0, -10000, -2100, -12100])
         ws.append(["ND-A 00001-00000004", "03/08/2026", 30744444444, 0, 100, 21, 122])
+        ws.append(["Total", None, None, None, None, None, 12615.6])
         odoo.create_sheet("Filtros")["A1"] = "conservar"
         odoo.save(self.odoo)
 
@@ -85,6 +86,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result["faltantes_en_odoo"], 1)
         self.assertEqual(result["faltantes_en_arca"], 1)
         self.assertEqual(result["invalidos_arca"], 1)
+        self.assertEqual(result["invalidos_odoo"], 0)
         self.assertEqual(result["fuera_periodo_odoo"], 1)
         self.assertEqual(result["faltantes"], result["faltantes_en_odoo"])
         self.assertEqual(load_workbook(result["origen_validado"]).sheetnames, ["ARCA", "Otra hoja"])
@@ -131,6 +133,23 @@ class PipelineTests(unittest.TestCase):
         loaded = load_afip_result(str(self.arca), "ARCA", mapping)
         duplicate_issues = loaded.issues[loaded.issues["MOTIVO"] == "clave de comprobante duplicada"]
         self.assertEqual(len(duplicate_issues), 2)
+
+    def test_shipped_config_loads_comprobantes_de_compras_format(self):
+        project_root = Path(__file__).resolve().parents[1]
+        mapping = yaml.safe_load(
+            (project_root / "config.yaml").read_text(encoding="utf-8")
+        )["mapping"]
+
+        loaded = load_afip_result(
+            str(project_root / "data" / "origen.xlsx"), "Sheet1", mapping
+        )
+
+        self.assertEqual(len(loaded.records), 4)
+        self.assertTrue(loaded.issues.empty)
+        self.assertEqual(loaded.records.iloc[0]["IDENTIFTRI"], "20202012375")
+        self.assertEqual(loaded.records.iloc[0]["IMP_NETO"], 1468863.75)
+        self.assertEqual(loaded.records.iloc[0]["IMP_IVA"], 308461.39)
+        self.assertEqual(loaded.records.iloc[0]["IMP_TOTAL"], 1777325.14)
 
 
 if __name__ == "__main__":
